@@ -193,6 +193,18 @@ async function apiPost(body) {
   return res.json();
 }
 
+// 樂觀更新：操作成功後先直接修改畫面上現有的資料並重新渲染，
+// 不用等下一次完整重新整理（fetchAll）的API回應才能看到變化，減少點擊後的等待感。
+// 之後仍會在背景呼叫 fetchAll() 與伺服器同步，確保多人同時使用時資料一致。
+function patchRecordLocally(id, fields) {
+  const idx = allRecords.findIndex(rec => rec.ID === id);
+  if (idx !== -1) {
+    allRecords[idx] = { ...allRecords[idx], ...fields };
+    return true;
+  }
+  return false;
+}
+
 /* ===================== 資料抓取 / 同步 ===================== */
 
 async function fetchAll(isManual) {
@@ -487,6 +499,13 @@ async function confirmBedInRecoveryRoom(id, wardBed) {
       res = await apiPost({ action: 'update', id, fields: { '推送位置': '恢復室' } });
     }
     if (res.success) {
+      if (matched) {
+        patchRecordLocally(matched.ID, { '推送位置': '恢復室', '狀態': '已推送' });
+      } else {
+        patchRecordLocally(id, { '推送位置': '恢復室' });
+      }
+      renderCurrentTab();
+      renderPushBedList();
       showToast('已標記：大床在恢復室', 'success');
       fetchAll();
     } else {
@@ -568,6 +587,9 @@ async function moveToRecoveryRoom(id, isPushBed) {
       res = await apiPost({ action: 'setTransportLocation', id, location: '恢復室' });
     }
     if (res.success) {
+      patchRecordLocally(id, { '推送位置': '恢復室' });
+      renderCurrentTab();
+      renderPushBedList();
       showToast('已標記為：恢復室', 'success');
       fetchAll();
     } else {
@@ -696,6 +718,8 @@ async function handleEditSubmit(e) {
   try {
     const res = await apiPost({ action: 'update', id, fields });
     if (res.success) {
+      patchRecordLocally(id, fields);
+      renderCurrentTab();
       showToast('已儲存修改', 'success');
       closeEditModal();
       fetchAll();
@@ -751,6 +775,23 @@ async function handleAddSubmit(e) {
       note
     });
     if (res.success) {
+      // 樂觀更新：先把新病人加到畫面上的待運送清單，不用等背景重新整理完成才看到
+      const arrivalDate = new Date(arrivalVal);
+      const expectedLeaveDate = new Date(arrivalDate.getTime() + 45 * 60000);
+      allRecords.push({
+        ID: 'temp-' + Date.now(),
+        'POR床號': porBed,
+        '病房床號': wardBed,
+        '床位類型': bedType,
+        '項目類型': '',
+        '狀態': '待運送',
+        '到達時間': toLocalInputValue(arrivalDate),
+        '預計離開時間': toLocalInputValue(expectedLeaveDate),
+        '備註': note,
+        '推送位置': ''
+      });
+      renderCurrentTab();
+
       // 小床病人若已填寫病房床號，自動建立「待推大床」需求，
       // 不需工作人員再到下方表單手動重複輸入一次
       let pushBedCreated = false;
@@ -765,7 +806,19 @@ async function handleAddSubmit(e) {
           try {
             const pushRes = await apiPost({ action: 'addPushBed', wardBed });
             pushBedCreated = !!(pushRes && pushRes.success);
-            if (!pushBedCreated) pendingPushBedWards.delete(wardBed);
+            if (pushBedCreated) {
+              allRecords.push({
+                ID: 'temp-push-' + Date.now(),
+                '項目類型': '推床',
+                '病房床號': wardBed,
+                '狀態': '待推送',
+                '推送位置': ''
+              });
+              renderPushBedList();
+              renderCurrentTab();
+            } else {
+              pendingPushBedWards.delete(wardBed);
+            }
           } catch (pushErr) {
             pendingPushBedWards.delete(wardBed);
           }
@@ -814,6 +867,9 @@ async function confirmComplete(id) {
   try {
     const res = await apiPost({ action: 'complete', id });
     if (res.success) {
+      patchRecordLocally(id, { '狀態': '已完成', '完成時間': toLocalInputValue(new Date()) });
+      renderCurrentTab();
+      renderPushBedList();
       showToast('已完成接送，床位已釋放', 'success');
       closeCompleteModal();
       fetchAll();
@@ -904,6 +960,15 @@ async function handlePushBedSubmit(e) {
   try {
     const res = await apiPost({ action: 'addPushBed', wardBed });
     if (res.success) {
+      allRecords.push({
+        ID: 'temp-push-' + Date.now(),
+        '項目類型': '推床',
+        '病房床號': wardBed,
+        '狀態': '待推送',
+        '推送位置': ''
+      });
+      renderPushBedList();
+      renderCurrentTab();
       showToast('已加入待推大床清單', 'success');
       input.value = '';
       fetchAll();
@@ -921,6 +986,9 @@ async function setPushBedLocation(id, location) {
   try {
     const res = await apiPost({ action: 'setPushLocation', id, location });
     if (res.success) {
+      patchRecordLocally(id, { '推送位置': location, '狀態': '已推送' });
+      renderPushBedList();
+      renderCurrentTab();
       showToast(`已標記為：${location}` + (location === '大廳' ? '（顯示於大廳候床）' : ''), 'success');
       fetchAll();
     } else {
@@ -935,6 +1003,9 @@ async function completePushBed(id) {
   try {
     const res = await apiPost({ action: 'update', id, fields: { '狀態': '已完成' } });
     if (res.success) {
+      patchRecordLocally(id, { '狀態': '已完成' });
+      renderPushBedList();
+      renderCurrentTab();
       showToast('已完成，從清單中移除', 'success');
       fetchAll();
     } else {
