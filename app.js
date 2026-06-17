@@ -377,11 +377,6 @@ function renderWaitingList() {
     const pendingPushBeds = allRecords.filter(rec => rec['項目類型'] === '推床' && rec['狀態'] === '待推送');
     const wardBedMatch = r['床位類型'] !== '大床' &&
       pendingPushBeds.some(rec => String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號'])));
-    let pushAlert = '';
-    if (wardBedMatch) {
-      badgeClass = 'bed-red';
-      pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
-    }
 
     // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
     // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
@@ -397,11 +392,27 @@ function renderWaitingList() {
         rec['推送位置'] === '恢復室' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
+    // 手動確認：若沒有對應的「待推大床」紀錄（或工作人員直接手動確認），
+    // 也可以直接在這個項目本身標記「大床在恢復室」
+    const manualRecoveryConfirmed = r['推送位置'] === '恢復室';
+
+    let pushAlert = '';
+    if (wardBedMatch && !manualRecoveryConfirmed && !pushedToRecoveryRecord) {
+      badgeClass = 'bed-red';
+      pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
+    }
+
     const pushedToLobbyBadge = pushedToLobbyRecord
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
-    const pushedToRecoveryBadge = pushedToRecoveryRecord
+    const pushedToRecoveryBadge = (pushedToRecoveryRecord || manualRecoveryConfirmed)
       ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 大床在恢復室</span>`
+      : '';
+    // 小床病人若還沒被自動標記為「大床在恢復室」，提供一個按鈕讓工作人員可以直接手動確認
+    // （適用於沒有先在「待推大床」面板登記、但大床其實已經推到恢復室的情況）
+    const showRecoveryConfirmBtn = r['床位類型'] === '小床' && !pushedToRecoveryRecord && !manualRecoveryConfirmed;
+    const recoveryConfirmBtn = showRecoveryConfirmBtn
+      ? `<button onclick="confirmBedInRecoveryRoom('${r.ID}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="loc-select mt-2" style="cursor:pointer;">✅ 確認大床已到恢復室</button>`
       : '';
 
     const now = new Date();
@@ -444,6 +455,7 @@ function renderWaitingList() {
           </p>
           ${note}
           ${pushAlert}
+          ${recoveryConfirmBtn}
         </div>
         <div class="text-right flex-shrink-0 flex flex-col items-end gap-2">
           <p class="font-bold ${statusClass} waiting-item-text">${statusLabel}</p>
@@ -456,6 +468,33 @@ function renderWaitingList() {
       </div>
     `;
   }).join('');
+}
+
+// 手動確認「大床已到恢復室」：
+// 若有對應的「待推大床」紀錄（且尚未標記為恢復室），直接更新它，讓待推大床面板同步移除；
+// 若找不到對應紀錄（例如一開始就沒有登記待推大床），則直接標記在此病人項目本身上
+async function confirmBedInRecoveryRoom(id, wardBed) {
+  try {
+    const matched = allRecords.find(rec =>
+      rec['項目類型'] === '推床' &&
+      rec['推送位置'] !== '恢復室' &&
+      String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
+    );
+    let res;
+    if (matched) {
+      res = await apiPost({ action: 'setPushLocation', id: matched.ID, location: '恢復室' });
+    } else {
+      res = await apiPost({ action: 'update', id, fields: { '推送位置': '恢復室' } });
+    }
+    if (res.success) {
+      showToast('已標記：大床在恢復室', 'success');
+      fetchAll();
+    } else {
+      showToast(res.message || '操作失敗', 'error');
+    }
+  } catch (err) {
+    showToast('連線失敗，請稍後再試', 'error');
+  }
 }
 
 /* ===================== 大廳候床清單 ===================== */
