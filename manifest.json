@@ -1,0 +1,26 @@
+{
+  "name": "恢復室病人運送管理系統",
+  "short_name": "恢復室運送",
+  "description": "恢復室病人運送管理系統 - 即時追蹤POR床位、待運送清單與運送完成紀錄",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#faf7f1",
+  "theme_color": "#0f4d49",
+  "orientation": "any",
+  "lang": "zh-Hant",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
