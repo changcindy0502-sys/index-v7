@@ -38,13 +38,39 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function populatePorBedOptions() {
+  refreshPorBedOptions();
+}
+
+// 每次 fetchAll 後重新整理 POR 床號選單，過濾掉目前已占用的床號
+function refreshPorBedOptions() {
   const select = document.getElementById('porBed');
+  const currentVal = select.value;
+
+  // 取得目前待運送中的 POR 床號
+  const occupied = new Set(
+    allRecords
+      .filter(r => r['狀態'] === '待運送' && r['項目類型'] !== '推床')
+      .map(r => r['POR床號'])
+  );
+
+  select.innerHTML = '<option value="">請選擇</option>';
   POR_BEDS.forEach(bed => {
     const opt = document.createElement('option');
     opt.value = bed;
-    opt.textContent = bed;
+    if (occupied.has(bed)) {
+      opt.textContent = `${bed} (占用中)`;
+      opt.disabled = true;
+      opt.style.color = '#bbb';
+    } else {
+      opt.textContent = bed;
+    }
     select.appendChild(opt);
   });
+
+  // 若原本選的還可用就保留，否則清空
+  if (currentVal && !occupied.has(currentVal)) {
+    select.value = currentVal;
+  }
 }
 
 function populateQuickPhrases() {
@@ -213,6 +239,7 @@ async function fetchAll(isManual) {
       pendingPushBedWards.clear();
       renderCurrentTab();
       renderPushBedList();
+      refreshPorBedOptions();
       cacheRecordsOffline(allRecords);
 
       if (res.dashboard) {
@@ -413,23 +440,28 @@ function renderWaitingList() {
     }
 
     // 連動：只看「本次病人到達後」建立的推床紀錄，避免歷史舊資料誤觸發
+    // 同時也檢查待運送項目本身的推送位置（快捷鍵走 setTransportLocation 時只更新自身）
     const arrivalTs = arrival ? arrival.getTime() : 0;
-    const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
+    const pushedToLobbyRecord = r['床位類型'] !== '大床' && (
+      r['推送位置'] === '大廳' ||
       allRecords.find(rec => {
         if (rec['項目類型'] !== '推床') return false;
         if (rec['推送位置'] !== '大廳') return false;
         if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
         const recTs = parseDate(rec['建立時間']);
-        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000; // 容許5分鐘誤差
-      });
-    const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
+        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000;
+      })
+    );
+    const pushedToRecoveryRecord = r['床位類型'] !== '大床' && (
+      r['推送位置'] === '恢復室' ||
       allRecords.find(rec => {
         if (rec['項目類型'] !== '推床') return false;
         if (rec['推送位置'] !== '恢復室') return false;
         if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
         const recTs = parseDate(rec['建立時間']);
         return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000;
-      });
+      })
+    );
     // 問題2：大床已在恢復室時，「已推到-大廳」不再顯示（最終狀態優先）
     const pushedToLobbyBadge = (pushedToLobbyRecord && !pushedToRecoveryRecord)
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
@@ -577,34 +609,25 @@ async function moveToRecoveryRoom(id, isPushBed) {
 }
 
 // 待運送面板快捷鍵：直接標記「床已推到恢復室」
-// 找到相同病房床號的推床紀錄（目前在大廳），呼叫 setPushLocation 改為恢復室
+// 路徑1：找到相同病房床號的推床紀錄（在大廳），改為恢復室
+// 路徑2：找不到推床紀錄時，直接更新待運送項目本身的推送位置
 async function markBedToRecovery(transportId, wardBed) {
-  // 找對應的推床紀錄 ID（推送位置=大廳、狀態未完成）
+  // 找對應的推床紀錄（推送位置=大廳，不限狀態，含已完成）
   const pushRec = allRecords.find(rec =>
     rec['項目類型'] === '推床' &&
-    rec['狀態'] !== '已完成' &&
     rec['推送位置'] === '大廳' &&
     String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
   );
 
-  if (!pushRec) {
-    // 若找不到推床紀錄，直接更新待運送項目的推送位置
-    try {
-      const res = await apiPost({ action: 'setTransportLocation', id: transportId, location: '恢復室' });
-      if (res.success) {
-        showToast('🛏️ 已標記：床已推到恢復室', 'success');
-        fetchAll();
-      } else {
-        showToast(res.message || '操作失敗', 'error');
-      }
-    } catch (err) {
-      showToast('連線失敗，請稍後再試', 'error');
-    }
-    return;
-  }
-
   try {
-    const res = await apiPost({ action: 'setPushLocation', id: pushRec.ID, location: '恢復室' });
+    let res;
+    if (pushRec) {
+      // 有推床紀錄：更新推床位置為恢復室
+      res = await apiPost({ action: 'setPushLocation', id: pushRec.ID, location: '恢復室' });
+    } else {
+      // 無推床紀錄（可能已被合併完成）：直接更新待運送項目的推送位置
+      res = await apiPost({ action: 'setTransportLocation', id: transportId, location: '恢復室' });
+    }
     if (res.success) {
       showToast('🛏️ 已標記：床已推到恢復室', 'success');
       fetchAll();
