@@ -412,22 +412,24 @@ function renderWaitingList() {
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
-    // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 床已推到恢復室）
-    // pushedToLobby：含已完成，確保 badge 持續顯示
-    // pushedToRecovery：含已完成，確保最終狀態也能顯示
+    // 連動：只看「本次病人到達後」建立的推床紀錄，避免歷史舊資料誤觸發
+    const arrivalTs = arrival ? arrival.getTime() : 0;
     const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
-      allRecords.find(rec =>
-        rec['項目類型'] === '推床' &&
-        rec['推送位置'] === '大廳' &&
-        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
-      );
+      allRecords.find(rec => {
+        if (rec['項目類型'] !== '推床') return false;
+        if (rec['推送位置'] !== '大廳') return false;
+        if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
+        const recTs = parseDate(rec['建立時間']);
+        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000; // 容許5分鐘誤差
+      });
     const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
-      allRecords.find(rec =>
-        rec['項目類型'] === '推床' &&
-        rec['推送位置'] === '恢復室' &&
-        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
-      );
+      allRecords.find(rec => {
+        if (rec['項目類型'] !== '推床') return false;
+        if (rec['推送位置'] !== '恢復室') return false;
+        if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
+        const recTs = parseDate(rec['建立時間']);
+        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000;
+      });
     // 問題2：大床已在恢復室時，「已推到-大廳」不再顯示（最終狀態優先）
     const pushedToLobbyBadge = (pushedToLobbyRecord && !pushedToRecoveryRecord)
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
