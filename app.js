@@ -818,22 +818,16 @@ async function handleAddSubmit(e) {
       // 不需工作人員再到下方表單手動重複輸入一次
       // 例外：若該床號已存在於大廳候床（推送位置=大廳），代表大床已推出，不需再建立
       let pushBedCreated = false;
-      if (bedType === '小床' && wardBed) {
-        // 排除：已有待推送紀錄、或床已推到大廳/恢復室（推床流程已啟動）
-        const alreadyPushed = allRecords.some(rec =>
-          rec['項目類型'] === '推床' &&
-          (rec['狀態'] === '待推送' || rec['推送位置'] === '大廳' || rec['推送位置'] === '恢復室') &&
-          String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
-        );
-        if (!alreadyPushed && !pendingPushBedWards.has(wardBed)) {
-          pendingPushBedWards.add(wardBed);
-          try {
-            const pushRes = await apiPost({ action: 'addPushBed', wardBed });
-            pushBedCreated = !!(pushRes && pushRes.success);
-            if (!pushBedCreated) pendingPushBedWards.delete(wardBed);
-          } catch (pushErr) {
-            pendingPushBedWards.delete(wardBed);
-          }
+      if (bedType === '小床' && wardBed && !pendingPushBedWards.has(wardBed)) {
+        pendingPushBedWards.add(wardBed);
+        try {
+          // 直接送後端，由後端判斷是否已有推床紀錄（前端 allRecords 可能是舊資料）
+          const pushRes = await apiPost({ action: 'addPushBed', wardBed });
+          // success=true 代表新建立；skipped=true 代表已有紀錄略過，兩者都算正常
+          pushBedCreated = !!(pushRes && pushRes.success);
+          if (!pushRes || (!pushRes.success && !pushRes.skipped)) pendingPushBedWards.delete(wardBed);
+        } catch (pushErr) {
+          pendingPushBedWards.delete(wardBed);
         }
       }
 
