@@ -413,12 +413,12 @@ function renderWaitingList() {
     }
 
     // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
-    // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
-    // 注意：排除「已完成」的推床紀錄，避免舊紀錄誤觸發
+    // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 床已推到恢復室）
+    // pushedToLobby：含已完成，確保 badge 持續顯示
+    // pushedToRecovery：含已完成，確保最終狀態也能顯示
     const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
-        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '大廳' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
@@ -794,18 +794,13 @@ async function handleAddSubmit(e) {
       // 例外：若該床號已存在於大廳候床（推送位置=大廳），代表大床已推出，不需再建立
       let pushBedCreated = false;
       if (bedType === '小床' && wardBed) {
-        const dup = allRecords.find(rec =>
+        // 排除：已有待推送紀錄、或床已推到大廳/恢復室（推床流程已啟動）
+        const alreadyPushed = allRecords.some(rec =>
           rec['項目類型'] === '推床' &&
-          rec['狀態'] === '待推送' &&
+          (rec['狀態'] === '待推送' || rec['推送位置'] === '大廳' || rec['推送位置'] === '恢復室') &&
           String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
         );
-        // 排除已在大廳候床的床號（推送位置已為大廳，不需再建立待推需求）
-        const alreadyInLobby = allRecords.some(rec =>
-          rec['項目類型'] === '推床' &&
-          rec['推送位置'] === '大廳' &&
-          String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
-        );
-        if (!dup && !alreadyInLobby && !pendingPushBedWards.has(wardBed)) {
+        if (!alreadyPushed && !pendingPushBedWards.has(wardBed)) {
           pendingPushBedWards.add(wardBed);
           try {
             const pushRes = await apiPost({ action: 'addPushBed', wardBed });
