@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchAll();
   startAutoRefresh();
   startCountdownTicker();
+  scheduleAutoCleanup();
   registerServiceWorker();
 });
 
@@ -71,9 +72,13 @@ function setDefaultArrivalTime() {
   updateExpectedLeavePreview();
 }
 
-// 點擊到達時間欄位時，重新帶入現在時間，方便直接選取（不用往前捲動選擇日期/時間）
+// 點擊到達時間欄位時，若欄位為空才帶入現在時間（不強制覆蓋已填入的值）
 function refreshArrivalTimeToNow() {
-  setDefaultArrivalTime();
+  const input = document.getElementById('arrivalTime');
+  if (!input.value) {
+    input.value = toLocalInputValue(new Date());
+    updateExpectedLeavePreview();
+  }
 }
 
 function bindEvents() {
@@ -193,18 +198,6 @@ async function apiPost(body) {
   return res.json();
 }
 
-// 樂觀更新：操作成功後先直接修改畫面上現有的資料並重新渲染，
-// 不用等下一次完整重新整理（fetchAll）的API回應才能看到變化，減少點擊後的等待感。
-// 之後仍會在背景呼叫 fetchAll() 與伺服器同步，確保多人同時使用時資料一致。
-function patchRecordLocally(id, fields) {
-  const idx = allRecords.findIndex(rec => rec.ID === id);
-  if (idx !== -1) {
-    allRecords[idx] = { ...allRecords[idx], ...fields };
-    return true;
-  }
-  return false;
-}
-
 /* ===================== 資料抓取 / 同步 ===================== */
 
 async function fetchAll(isManual) {
@@ -265,6 +258,30 @@ function manualRefresh() {
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(fetchAll, REFRESH_INTERVAL);
+}
+
+/* ===================== 定期清理已完成紀錄 ===================== */
+// 每次APP啟動時檢查，若距上次清理超過2天則自動觸發後端清理
+function scheduleAutoCleanup() {
+  const CLEANUP_INTERVAL_MS = 2 * 24 * 60 * 60 * 1000; // 2天
+  const lastCleanup = localStorage.getItem('por_last_cleanup');
+  const now = Date.now();
+
+  if (!lastCleanup || (now - parseInt(lastCleanup, 10)) > CLEANUP_INTERVAL_MS) {
+    // 延遲5秒執行，避免影響啟動時的資料載入
+    setTimeout(async () => {
+      try {
+        const res = await apiPost({ action: 'cleanupCompleted', daysOld: 2 });
+        if (res && res.success) {
+          localStorage.setItem('por_last_cleanup', String(now));
+          if (res.deleted > 0) {
+            showToast(`🧹 已自動清理 ${res.deleted} 筆舊完成紀錄`, 'info');
+            fetchAll();
+          }
+        }
+      } catch (e) { /* 清理失敗不影響主功能 */ }
+    }, 5000);
+  }
 }
 
 function startCountdownTicker() {
@@ -389,6 +406,11 @@ function renderWaitingList() {
     const pendingPushBeds = allRecords.filter(rec => rec['項目類型'] === '推床' && rec['狀態'] === '待推送');
     const wardBedMatch = r['床位類型'] !== '大床' &&
       pendingPushBeds.some(rec => String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號'])));
+    let pushAlert = '';
+    if (wardBedMatch) {
+      badgeClass = 'bed-red';
+      pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
+    }
 
     // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
     // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
@@ -404,27 +426,12 @@ function renderWaitingList() {
         rec['推送位置'] === '恢復室' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
-    // 手動確認：若沒有對應的「待推大床」紀錄（或工作人員直接手動確認），
-    // 也可以直接在這個項目本身標記「大床在恢復室」
-    const manualRecoveryConfirmed = r['推送位置'] === '恢復室';
-
-    let pushAlert = '';
-    if (wardBedMatch && !manualRecoveryConfirmed && !pushedToRecoveryRecord) {
-      badgeClass = 'bed-red';
-      pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
-    }
-
-    const pushedToLobbyBadge = pushedToLobbyRecord
+    // 問題2：大床已在恢復室時，「已推到-大廳」不再顯示（最終狀態優先）
+    const pushedToLobbyBadge = (pushedToLobbyRecord && !pushedToRecoveryRecord)
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
-    const pushedToRecoveryBadge = (pushedToRecoveryRecord || manualRecoveryConfirmed)
+    const pushedToRecoveryBadge = pushedToRecoveryRecord
       ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 大床在恢復室</span>`
-      : '';
-    // 小床病人若還沒被自動標記為「大床在恢復室」，提供一個按鈕讓工作人員可以直接手動確認
-    // （適用於沒有先在「待推大床」面板登記、但大床其實已經推到恢復室的情況）
-    const showRecoveryConfirmBtn = r['床位類型'] === '小床' && !pushedToRecoveryRecord && !manualRecoveryConfirmed;
-    const recoveryConfirmBtn = showRecoveryConfirmBtn
-      ? `<button onclick="confirmBedInRecoveryRoom('${r.ID}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="loc-select mt-2" style="cursor:pointer;">✅ 確認大床已到恢復室</button>`
       : '';
 
     const now = new Date();
@@ -440,11 +447,16 @@ function renderWaitingList() {
       statusClass = level === 'yellow' ? 'text-[var(--amber-500)]' : 'text-[var(--green-600)]';
     }
 
+    // 問題2：若大床在恢復室，隱藏床位類型 pill，只顯示「大床在恢復室」即可
     const isSmall = r['床位類型'] === '小床';
     const isLarge = r['床位類型'] === '大床';
     const wardBedClass = isSmall ? 'ward-bed-text ward-bed-small-bg' : 'ward-bed-text';
     const typePillClass = isLarge ? 'pill pill-waiting-large' : 'pill pill-waiting-small';
     const typePillStyle = 'font-size:1.15rem; padding:.2rem .75rem;';
+    const showTypePill = !pushedToRecoveryRecord;
+    const typePillHtml = showTypePill
+      ? `<span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>`
+      : '';
 
     const note = r['備註'] ? `<p class="text-xs text-gray-400 mt-1">📋 ${escapeHtml(r['備註']).replace(/\n/g, '、')}</p>` : '';
 
@@ -458,7 +470,7 @@ function renderWaitingList() {
           <p class="text-xs text-gray-400 mb-0.5 waiting-item-label">病房床號 / 類型</p>
           <div class="flex items-center gap-2 flex-wrap">
             <span class="${wardBedClass}">${escapeHtml(fixWardBedDisplay(r['病房床號']) || '—')}</span>
-            <span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>
+            ${typePillHtml}
             ${pushedToLobbyBadge}
             ${pushedToRecoveryBadge}
           </div>
@@ -467,7 +479,6 @@ function renderWaitingList() {
           </p>
           ${note}
           ${pushAlert}
-          ${recoveryConfirmBtn}
         </div>
         <div class="text-right flex-shrink-0 flex flex-col items-end gap-2">
           <p class="font-bold ${statusClass} waiting-item-text">${statusLabel}</p>
@@ -480,40 +491,6 @@ function renderWaitingList() {
       </div>
     `;
   }).join('');
-}
-
-// 手動確認「大床已到恢復室」：
-// 若有對應的「待推大床」紀錄（且尚未標記為恢復室），直接更新它，讓待推大床面板同步移除；
-// 若找不到對應紀錄（例如一開始就沒有登記待推大床），則直接標記在此病人項目本身上
-async function confirmBedInRecoveryRoom(id, wardBed) {
-  try {
-    const matched = allRecords.find(rec =>
-      rec['項目類型'] === '推床' &&
-      rec['推送位置'] !== '恢復室' &&
-      String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
-    );
-    let res;
-    if (matched) {
-      res = await apiPost({ action: 'setPushLocation', id: matched.ID, location: '恢復室' });
-    } else {
-      res = await apiPost({ action: 'update', id, fields: { '推送位置': '恢復室' } });
-    }
-    if (res.success) {
-      if (matched) {
-        patchRecordLocally(matched.ID, { '推送位置': '恢復室', '狀態': '已推送' });
-      } else {
-        patchRecordLocally(id, { '推送位置': '恢復室' });
-      }
-      renderCurrentTab();
-      renderPushBedList();
-      showToast('已標記：大床在恢復室', 'success');
-      fetchAll();
-    } else {
-      showToast(res.message || '操作失敗', 'error');
-    }
-  } catch (err) {
-    showToast('連線失敗，請稍後再試', 'error');
-  }
 }
 
 /* ===================== 大廳候床清單 ===================== */
@@ -587,9 +564,6 @@ async function moveToRecoveryRoom(id, isPushBed) {
       res = await apiPost({ action: 'setTransportLocation', id, location: '恢復室' });
     }
     if (res.success) {
-      patchRecordLocally(id, { '推送位置': '恢復室' });
-      renderCurrentTab();
-      renderPushBedList();
       showToast('已標記為：恢復室', 'success');
       fetchAll();
     } else {
@@ -718,8 +692,6 @@ async function handleEditSubmit(e) {
   try {
     const res = await apiPost({ action: 'update', id, fields });
     if (res.success) {
-      patchRecordLocally(id, fields);
-      renderCurrentTab();
       showToast('已儲存修改', 'success');
       closeEditModal();
       fetchAll();
@@ -775,25 +747,9 @@ async function handleAddSubmit(e) {
       note
     });
     if (res.success) {
-      // 樂觀更新：先把新病人加到畫面上的待運送清單，不用等背景重新整理完成才看到
-      const arrivalDate = new Date(arrivalVal);
-      const expectedLeaveDate = new Date(arrivalDate.getTime() + 45 * 60000);
-      allRecords.push({
-        ID: 'temp-' + Date.now(),
-        'POR床號': porBed,
-        '病房床號': wardBed,
-        '床位類型': bedType,
-        '項目類型': '',
-        '狀態': '待運送',
-        '到達時間': toLocalInputValue(arrivalDate),
-        '預計離開時間': toLocalInputValue(expectedLeaveDate),
-        '備註': note,
-        '推送位置': ''
-      });
-      renderCurrentTab();
-
       // 小床病人若已填寫病房床號，自動建立「待推大床」需求，
       // 不需工作人員再到下方表單手動重複輸入一次
+      // 例外：若該床號已存在於大廳候床（推送位置=大廳），代表大床已推出，不需再建立
       let pushBedCreated = false;
       if (bedType === '小床' && wardBed) {
         const dup = allRecords.find(rec =>
@@ -801,24 +757,18 @@ async function handleAddSubmit(e) {
           rec['狀態'] === '待推送' &&
           String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
         );
-        if (!dup && !pendingPushBedWards.has(wardBed)) {
+        // 排除已在大廳候床的床號（推送位置已為大廳，不需再建立待推需求）
+        const alreadyInLobby = allRecords.some(rec =>
+          rec['項目類型'] === '推床' &&
+          rec['推送位置'] === '大廳' &&
+          String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
+        );
+        if (!dup && !alreadyInLobby && !pendingPushBedWards.has(wardBed)) {
           pendingPushBedWards.add(wardBed);
           try {
             const pushRes = await apiPost({ action: 'addPushBed', wardBed });
             pushBedCreated = !!(pushRes && pushRes.success);
-            if (pushBedCreated) {
-              allRecords.push({
-                ID: 'temp-push-' + Date.now(),
-                '項目類型': '推床',
-                '病房床號': wardBed,
-                '狀態': '待推送',
-                '推送位置': ''
-              });
-              renderPushBedList();
-              renderCurrentTab();
-            } else {
-              pendingPushBedWards.delete(wardBed);
-            }
+            if (!pushBedCreated) pendingPushBedWards.delete(wardBed);
           } catch (pushErr) {
             pendingPushBedWards.delete(wardBed);
           }
@@ -867,9 +817,6 @@ async function confirmComplete(id) {
   try {
     const res = await apiPost({ action: 'complete', id });
     if (res.success) {
-      patchRecordLocally(id, { '狀態': '已完成', '完成時間': toLocalInputValue(new Date()) });
-      renderCurrentTab();
-      renderPushBedList();
       showToast('已完成接送，床位已釋放', 'success');
       closeCompleteModal();
       fetchAll();
@@ -960,15 +907,6 @@ async function handlePushBedSubmit(e) {
   try {
     const res = await apiPost({ action: 'addPushBed', wardBed });
     if (res.success) {
-      allRecords.push({
-        ID: 'temp-push-' + Date.now(),
-        '項目類型': '推床',
-        '病房床號': wardBed,
-        '狀態': '待推送',
-        '推送位置': ''
-      });
-      renderPushBedList();
-      renderCurrentTab();
       showToast('已加入待推大床清單', 'success');
       input.value = '';
       fetchAll();
@@ -986,9 +924,6 @@ async function setPushBedLocation(id, location) {
   try {
     const res = await apiPost({ action: 'setPushLocation', id, location });
     if (res.success) {
-      patchRecordLocally(id, { '推送位置': location, '狀態': '已推送' });
-      renderPushBedList();
-      renderCurrentTab();
       showToast(`已標記為：${location}` + (location === '大廳' ? '（顯示於大廳候床）' : ''), 'success');
       fetchAll();
     } else {
@@ -1003,9 +938,6 @@ async function completePushBed(id) {
   try {
     const res = await apiPost({ action: 'update', id, fields: { '狀態': '已完成' } });
     if (res.success) {
-      patchRecordLocally(id, { '狀態': '已完成' });
-      renderPushBedList();
-      renderCurrentTab();
       showToast('已完成，從清單中移除', 'success');
       fetchAll();
     } else {
