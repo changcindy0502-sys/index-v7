@@ -482,6 +482,8 @@ function renderWaitingList() {
         <div class="text-right flex-shrink-0 flex flex-col items-end gap-2">
           <p class="font-bold ${statusClass} waiting-item-text">${statusLabel}</p>
           <p class="text-gray-400 waiting-item-label">已等候: ${elapsedMin} 分鐘</p>
+          ${pushedToLobbyRecord && !pushedToRecoveryRecord ? `
+          <button onclick="markBedToRecovery('${r.ID}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-edit" style="background:#e3edf7;color:var(--teal-700);border-color:#c5daea;white-space:nowrap;">🛏️ 床已推到恢復室</button>` : ''}
           <div class="flex gap-2">
             <button onclick='openEditModal(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="btn-edit">✏️ 編輯</button>
             <button onclick="openCompleteModal('${r.ID}', '${escapeHtml(r['POR床號'])}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-complete">🚀 接送完成</button>
@@ -564,6 +566,46 @@ async function moveToRecoveryRoom(id, isPushBed) {
     }
     if (res.success) {
       showToast('已標記為：恢復室', 'success');
+      fetchAll();
+    } else {
+      showToast(res.message || '操作失敗', 'error');
+    }
+  } catch (err) {
+    showToast('連線失敗，請稍後再試', 'error');
+  }
+}
+
+// 待運送面板快捷鍵：直接標記「床已推到恢復室」
+// 找到相同病房床號的推床紀錄（目前在大廳），呼叫 setPushLocation 改為恢復室
+async function markBedToRecovery(transportId, wardBed) {
+  // 找對應的推床紀錄 ID（推送位置=大廳、狀態未完成）
+  const pushRec = allRecords.find(rec =>
+    rec['項目類型'] === '推床' &&
+    rec['狀態'] !== '已完成' &&
+    rec['推送位置'] === '大廳' &&
+    String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
+  );
+
+  if (!pushRec) {
+    // 若找不到推床紀錄，直接更新待運送項目的推送位置
+    try {
+      const res = await apiPost({ action: 'setTransportLocation', id: transportId, location: '恢復室' });
+      if (res.success) {
+        showToast('🛏️ 已標記：床已推到恢復室', 'success');
+        fetchAll();
+      } else {
+        showToast(res.message || '操作失敗', 'error');
+      }
+    } catch (err) {
+      showToast('連線失敗，請稍後再試', 'error');
+    }
+    return;
+  }
+
+  try {
+    const res = await apiPost({ action: 'setPushLocation', id: pushRec.ID, location: '恢復室' });
+    if (res.success) {
+      showToast('🛏️ 已標記：床已推到恢復室', 'success');
       fetchAll();
     } else {
       showToast(res.message || '操作失敗', 'error');
