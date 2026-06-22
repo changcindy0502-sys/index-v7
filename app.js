@@ -434,7 +434,7 @@ function renderWaitingList() {
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
     const pushedToRecoveryBadge = pushedToRecoveryRecord
-      ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 大床在恢復室</span>`
+      ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 床已推到恢復室</span>`
       : '';
 
     const now = new Date();
@@ -450,16 +450,12 @@ function renderWaitingList() {
       statusClass = level === 'yellow' ? 'text-[var(--amber-500)]' : 'text-[var(--green-600)]';
     }
 
-    // 問題2：若大床在恢復室，隱藏床位類型 pill，只顯示「大床在恢復室」即可
     const isSmall = r['床位類型'] === '小床';
     const isLarge = r['床位類型'] === '大床';
     const wardBedClass = isSmall ? 'ward-bed-text ward-bed-small-bg' : 'ward-bed-text';
     const typePillClass = isLarge ? 'pill pill-waiting-large' : 'pill pill-waiting-small';
     const typePillStyle = 'font-size:1.15rem; padding:.2rem .75rem;';
-    const showTypePill = !pushedToRecoveryRecord;
-    const typePillHtml = showTypePill
-      ? `<span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>`
-      : '';
+    const typePillHtml = `<span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>`;
 
     const note = r['備註'] ? `<p class="text-xs text-gray-400 mt-1">📋 ${escapeHtml(r['備註']).replace(/\n/g, '、')}</p>` : '';
 
