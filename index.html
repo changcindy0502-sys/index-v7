@@ -311,9 +311,10 @@
         <label class="block text-xs font-bold text-gray-500 mb-1">預計離開時間</label>
         <input id="editExpectedLeave" type="datetime-local" class="input-field" />
         <div class="flex gap-2 mt-2">
-          <button type="button" onclick="adjustEditExpectedLeave(-15)" class="loc-select" style="cursor:pointer;">-15分</button>
+          <button type="button" onclick="adjustEditExpectedLeave(10)" class="loc-select" style="cursor:pointer;">+10分</button>
           <button type="button" onclick="adjustEditExpectedLeave(15)" class="loc-select" style="cursor:pointer;">+15分</button>
-          <button type="button" onclick="resetEditExpectedLeaveToNowPlus45()" class="loc-select" style="cursor:pointer;">設為現在+45分</button>
+          <button type="button" onclick="adjustEditExpectedLeave(30)" class="loc-select" style="cursor:pointer;">+30分</button>
+          <button type="button" onclick="resetEditExpectedLeaveToNowPlus45()" class="loc-select" style="cursor:pointer;">現在+45分</button>
         </div>
         <p class="text-[11px] text-gray-400 mt-1">不修改請留空（留空將保持原本時間）；若選擇器點選不順，可使用上方按鈕快速調整</p>
       </div>
