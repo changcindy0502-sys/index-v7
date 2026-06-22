@@ -121,6 +121,10 @@
   .spin{ animation:spin 1s linear infinite; }
   @keyframes spin{ to{ transform:rotate(360deg); } }
 
+  /* 強制 datetime-local 使用24小時制 */
+  input[type="datetime-local"]::-webkit-datetime-edit-ampm-field { display: none; }
+  input[type="datetime-local"] { --webkit-datetime-edit-hour-field: 24h; }
+
   .modal-bg{ background:rgba(36,48,53,.45); backdrop-filter:blur(2px); }
 
   @media (max-width: 1024px){
@@ -197,7 +201,7 @@
           </div>
           <div>
             <label class="block text-xs font-bold text-gray-500 mb-1">🕐 到達時間</label>
-            <input id="arrivalTime" type="datetime-local" required class="input-field" />
+            <input id="arrivalTime" type="datetime-local" required class="input-field" step="60" />
           </div>
           <div class="bg-[#eef2e3] rounded-lg px-4 py-2.5 flex justify-between items-center text-sm">
             <span class="font-bold text-gray-600">🚀 預計離開時間 (+45分)</span>
@@ -309,7 +313,7 @@
       </div>
       <div>
         <label class="block text-xs font-bold text-gray-500 mb-1">預計離開時間</label>
-        <input id="editExpectedLeave" type="datetime-local" class="input-field" />
+        <input id="editExpectedLeave" type="datetime-local" class="input-field" step="60" />
         <div class="flex gap-2 mt-2">
           <button type="button" onclick="adjustEditExpectedLeave(10)" class="loc-select" style="cursor:pointer;">+10分</button>
           <button type="button" onclick="adjustEditExpectedLeave(15)" class="loc-select" style="cursor:pointer;">+15分</button>
