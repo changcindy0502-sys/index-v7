@@ -425,7 +425,6 @@ function renderWaitingList() {
     const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
-        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '恢復室' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
