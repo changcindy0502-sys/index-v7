@@ -414,15 +414,18 @@ function renderWaitingList() {
 
     // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
     // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
+    // 注意：排除「已完成」的推床紀錄，避免舊紀錄誤觸發
     const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
+        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '大廳' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
     const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
+        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '恢復室' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
@@ -684,9 +687,11 @@ async function handleEditSubmit(e) {
     '備註': document.getElementById('editNote').value
   };
 
-  // 只有有填預計離開時間才更新
+  // 只有有填預計離開時間才更新，使用本地時間格式避免UTC時差問題
   if (expectedLeaveVal) {
-    fields['預計離開時間'] = new Date(expectedLeaveVal).toISOString().replace('T', ' ').substring(0, 19);
+    const d = new Date(expectedLeaveVal);
+    const pad = n => String(n).padStart(2, '0');
+    fields['預計離開時間'] = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
   }
 
   try {
