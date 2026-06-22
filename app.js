@@ -439,13 +439,15 @@ function renderWaitingList() {
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：只看「本次病人到達後」建立的推床紀錄，避免歷史舊資料誤觸發
+    // 連動：只看未完成、且本次病人到達後建立的推床紀錄
+    // 已完成的紀錄完全不影響新病人的顯示
     // 同時也檢查待運送項目本身的推送位置（快捷鍵走 setTransportLocation 時只更新自身）
     const arrivalTs = arrival ? arrival.getTime() : 0;
     const pushedToLobbyRecord = r['床位類型'] !== '大床' && (
-      r['推送位置'] === '大廳' ||
+      (r['推送位置'] === '大廳' && r['狀態'] !== '已完成') ||
       allRecords.find(rec => {
         if (rec['項目類型'] !== '推床') return false;
+        if (rec['狀態'] === '已完成') return false;
         if (rec['推送位置'] !== '大廳') return false;
         if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
         const recTs = parseDate(rec['建立時間']);
@@ -453,9 +455,10 @@ function renderWaitingList() {
       })
     );
     const pushedToRecoveryRecord = r['床位類型'] !== '大床' && (
-      r['推送位置'] === '恢復室' ||
+      (r['推送位置'] === '恢復室' && r['狀態'] !== '已完成') ||
       allRecords.find(rec => {
         if (rec['項目類型'] !== '推床') return false;
+        if (rec['狀態'] === '已完成') return false;
         if (rec['推送位置'] !== '恢復室') return false;
         if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
         const recTs = parseDate(rec['建立時間']);
