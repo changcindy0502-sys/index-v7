@@ -24,6 +24,7 @@ let allRecords = [];
 let currentTab = 'waiting';
 let countdownTimer = null;
 let refreshTimer = null;
+let statsRange = null; // 'today' | 'week' | 'month' | 'custom'
 // 暫存「剛新增、尚未從API確認回來」的病房床號，避免快速連續送出造成重複
 const pendingWardBeds = new Set();
 const pendingPushBedWards = new Set();
@@ -189,6 +190,14 @@ async function apiGet(action) {
   return res.json();
 }
 
+async function apiGetStats(start, end) {
+  const params = new URLSearchParams({ action: 'stats' });
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  const res = await fetch(`${API_URL}?${params.toString()}`);
+  return res.json();
+}
+
 async function apiPost(body) {
   const res = await fetch(API_URL, {
     method: 'POST',
@@ -297,7 +306,14 @@ function switchTab(tab) {
   document.getElementById('waitingPanel').classList.toggle('hidden', tab !== 'waiting');
   document.getElementById('lobbyPanel').classList.toggle('hidden', tab !== 'lobby');
   document.getElementById('completedPanel').classList.toggle('hidden', tab !== 'completed');
-  renderCurrentTab();
+  document.getElementById('statsPanel').classList.toggle('hidden', tab !== 'stats');
+  document.getElementById('searchWrapper').classList.toggle('hidden', tab === 'stats');
+  if (tab === 'stats') {
+    if (!statsRange) setStatsRange('today');
+    else loadStats();
+  } else {
+    renderCurrentTab();
+  }
 }
 
 function renderCurrentTab() {
@@ -976,6 +992,151 @@ function fixWardBedDisplay(value) {
     return prefix;
   }
   return str;
+}
+
+/* ===================== 統計報表 ===================== */
+
+function toDateInputValue(date) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// 依預設區間（today/week/month）回傳 { start, end } Date 物件（本地時區，當天 00:00 起算）
+function getStatsPresetRange(range) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let start = today;
+  const end = today;
+
+  if (range === 'week') {
+    const day = today.getDay(); // 0=週日
+    const diffToMonday = (day === 0 ? 6 : day - 1);
+    start = new Date(today);
+    start.setDate(today.getDate() - diffToMonday);
+  } else if (range === 'month') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+  }
+  return { start, end };
+}
+
+function setStatsRange(range) {
+  statsRange = range;
+  document.querySelectorAll('#statsPanel .quick-phrase[data-range]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.range === range);
+  });
+  const customWrap = document.getElementById('statsCustomRange');
+  if (range === 'custom') {
+    customWrap.classList.remove('hidden');
+    if (!document.getElementById('statsStartDate').value) {
+      const { start, end } = getStatsPresetRange('month');
+      document.getElementById('statsStartDate').value = toDateInputValue(start);
+      document.getElementById('statsEndDate').value = toDateInputValue(end);
+    }
+    return; // 自訂範圍等使用者按「查詢」才觸發
+  }
+  customWrap.classList.add('hidden');
+  loadStats();
+}
+
+async function loadStats() {
+  let startStr, endStr;
+  if (statsRange === 'custom') {
+    startStr = document.getElementById('statsStartDate').value;
+    endStr = document.getElementById('statsEndDate').value;
+    if (!startStr || !endStr) {
+      showToast('請選擇開始與結束日期', 'error');
+      return;
+    }
+  } else {
+    const { start, end } = getStatsPresetRange(statsRange || 'today');
+    startStr = toDateInputValue(start);
+    endStr = toDateInputValue(end);
+  }
+
+  document.getElementById('statsContent').classList.add('hidden');
+  document.getElementById('statsEmpty').classList.add('hidden');
+  document.getElementById('statsLoading').classList.remove('hidden');
+
+  try {
+    const res = await apiGetStats(startStr, endStr);
+    document.getElementById('statsLoading').classList.add('hidden');
+    if (res.success) {
+      renderStats(res.data);
+    } else {
+      showToast(res.message || '讀取統計資料失敗', 'error');
+    }
+  } catch (err) {
+    document.getElementById('statsLoading').classList.add('hidden');
+    showToast('連線失敗，請稍後再試', 'error');
+  }
+}
+
+function renderStats(data) {
+  if (!data || data.totalCount === 0) {
+    document.getElementById('statsContent').classList.add('hidden');
+    document.getElementById('statsEmpty').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('statsEmpty').classList.add('hidden');
+  document.getElementById('statsContent').classList.remove('hidden');
+
+  document.getElementById('statTotalCount').textContent = data.totalCount;
+  document.getElementById('statDaySpan').textContent = `共 ${data.daySpan} 天`;
+  document.getElementById('statTurnover').textContent = data.turnoverPerBedPerDay;
+  document.getElementById('statAvgStay').textContent = data.avgStay;
+  document.getElementById('statOvertimeRate').textContent = data.overtimeRate + '%';
+  document.getElementById('statOvertimeDetail').textContent =
+    `${data.overtimeCount} 筆超時，平均超時 ${data.avgOvertimeMinutes} 分`;
+
+  // 小床 / 大床比例
+  const bedTotal = data.smallBedCount + data.largeBedCount;
+  const smallPct = bedTotal > 0 ? Math.round((data.smallBedCount / bedTotal) * 100) : 0;
+  const largePct = bedTotal > 0 ? 100 - smallPct : 0;
+  document.getElementById('statsBedTypeBar').innerHTML = `
+    <div class="flex items-center gap-3">
+      <span class="text-sm w-16 flex-shrink-0">小床</span>
+      <div class="flex-1 bg-[#eef2ee] rounded-full h-3 overflow-hidden">
+        <div class="h-3 rounded-full" style="width:${smallPct}%; background:var(--amber-500);"></div>
+      </div>
+      <span class="text-sm font-bold w-24 text-right flex-shrink-0">${data.smallBedCount} 床 (${smallPct}%)</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="text-sm w-16 flex-shrink-0">大床</span>
+      <div class="flex-1 bg-[#eef2ee] rounded-full h-3 overflow-hidden">
+        <div class="h-3 rounded-full" style="width:${largePct}%; background:var(--teal-700);"></div>
+      </div>
+      <span class="text-sm font-bold w-24 text-right flex-shrink-0">${data.largeBedCount} 床 (${largePct}%)</span>
+    </div>
+  `;
+
+  // 各 POR 床使用次數（由高到低排序）
+  const porEntries = Object.entries(data.porUsage || {}).sort((a, b) => b[1] - a[1]);
+  const maxPorCount = porEntries.length > 0 ? porEntries[0][1] : 1;
+  document.getElementById('statsPorUsage').innerHTML = porEntries.map(([por, count]) => {
+    const pct = Math.round((count / maxPorCount) * 100);
+    return `
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-bold w-20 flex-shrink-0">${escapeHtml(por)}</span>
+        <div class="flex-1 bg-[#eef2ee] rounded-full h-3 overflow-hidden">
+          <div class="h-3 rounded-full" style="width:${pct}%; background:var(--header-teal);"></div>
+        </div>
+        <span class="text-sm font-bold w-16 text-right flex-shrink-0">${count} 次</span>
+      </div>
+    `;
+  }).join('');
+
+  // 24小時運送時段分布（依到達時間）
+  const maxHourCount = Math.max(1, ...data.hourDist);
+  document.getElementById('statsHourChart').innerHTML = data.hourDist.map((count, hour) => {
+    const barPx = count > 0 ? Math.max(4, Math.round((count / maxHourCount) * 100)) : 0;
+    return `
+      <div class="flex-1 flex flex-col items-center justify-end" style="height:140px;" title="${hour}時：${count}筆">
+        <span class="text-[10px] text-gray-400 mb-1">${count > 0 ? count : ''}</span>
+        <div style="width:100%; height:${barPx}px; background:var(--header-teal); border-radius:3px 3px 0 0;"></div>
+        <span class="text-[9px] text-gray-400 mt-1">${hour}</span>
+      </div>
+    `;
+  }).join('');
 }
 
 /* ===================== PWA Service Worker ===================== */
