@@ -2,7 +2,7 @@
    恢復室病人運送管理系統 - app.js
    ========================================================= */
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbz-loNz21CtD8Q6Vtua4i8mYm8MfJAGLWmcy3ZFTCaO_KLX7uGenYkFYzpJ7ZqiEDYd/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbw8iTwSNz0f2vBIgJGZZWO9CuFRFVO16Db1dHKOnCjgVwRE3Bal8V6R1jb5qQ07KsF4gQ/exec';
 
 const POR_BEDS = Array.from({ length: 18 }, (_, i) => 'POR-' + String(i + 1).padStart(2, '0'));
 const REFRESH_INTERVAL = 30000; // 30 秒
