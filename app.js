@@ -25,6 +25,8 @@ let currentTab = 'waiting';
 let countdownTimer = null;
 let refreshTimer = null;
 let statsRange = null; // 'today' | 'week' | 'month' | 'custom'
+let lastStatsData = null;
+let lastStatsRangeStr = { start: '', end: '' };
 // 暫存「剛新增、尚未從API確認回來」的病房床號，避免快速連續送出造成重複
 const pendingWardBeds = new Set();
 const pendingPushBedWards = new Set();
@@ -1056,6 +1058,9 @@ async function loadStats() {
   document.getElementById('statsContent').classList.add('hidden');
   document.getElementById('statsEmpty').classList.add('hidden');
   document.getElementById('statsLoading').classList.remove('hidden');
+  document.getElementById('statsExportBtn').classList.add('hidden');
+
+  lastStatsRangeStr = { start: startStr, end: endStr };
 
   try {
     const res = await apiGetStats(startStr, endStr);
@@ -1072,13 +1077,16 @@ async function loadStats() {
 }
 
 function renderStats(data) {
+  lastStatsData = data;
   if (!data || data.totalCount === 0) {
     document.getElementById('statsContent').classList.add('hidden');
     document.getElementById('statsEmpty').classList.remove('hidden');
+    document.getElementById('statsExportBtn').classList.add('hidden');
     return;
   }
   document.getElementById('statsEmpty').classList.add('hidden');
   document.getElementById('statsContent').classList.remove('hidden');
+  document.getElementById('statsExportBtn').classList.remove('hidden');
 
   document.getElementById('statTotalCount').textContent = data.totalCount;
   document.getElementById('statDaySpan').textContent = `共 ${data.daySpan} 天`;
@@ -1137,6 +1145,54 @@ function renderStats(data) {
       </div>
     `;
   }).join('');
+}
+
+/* ===================== 統計報表匯出 Excel ===================== */
+
+function exportStatsExcel() {
+  if (!lastStatsData || typeof XLSX === 'undefined') {
+    showToast('目前沒有可匯出的統計資料', 'error');
+    return;
+  }
+  const data = lastStatsData;
+  const { start, end } = lastStatsRangeStr;
+
+  // 摘要工作表
+  const summaryRows = [
+    ['恢復室病人運送 - 統計報表'],
+    ['查詢區間', `${start} ~ ${end}`, `共 ${data.daySpan} 天`],
+    [],
+    ['指標', '數值'],
+    ['總接送數', data.totalCount],
+    ['平均翻床率（每床/每天）', data.turnoverPerBedPerDay],
+    ['平均停留時間（分）', data.avgStay],
+    ['超時比例', data.overtimeRate + '%'],
+    ['超時筆數', data.overtimeCount],
+    ['平均超時分鐘', data.avgOvertimeMinutes],
+    ['小床使用數', data.smallBedCount],
+    ['大床使用數', data.largeBedCount]
+  ];
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  summarySheet['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 10 }];
+
+  // 各POR床使用次數工作表
+  const porEntries = Object.entries(data.porUsage || {}).sort((a, b) => b[1] - a[1]);
+  const porRows = [['POR床號', '使用次數'], ...porEntries];
+  const porSheet = XLSX.utils.aoa_to_sheet(porRows);
+  porSheet['!cols'] = [{ wch: 14 }, { wch: 10 }];
+
+  // 時段分布工作表
+  const hourRows = [['時段（小時）', '接送筆數'], ...data.hourDist.map((count, hour) => [`${hour}:00`, count])];
+  const hourSheet = XLSX.utils.aoa_to_sheet(hourRows);
+  hourSheet['!cols'] = [{ wch: 12 }, { wch: 10 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, summarySheet, '摘要');
+  XLSX.utils.book_append_sheet(wb, porSheet, 'POR床使用次數');
+  XLSX.utils.book_append_sheet(wb, hourSheet, '時段分布');
+
+  const filename = `恢復室運送統計報表_${start}_${end}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 /* ===================== PWA Service Worker ===================== */
