@@ -8,6 +8,7 @@
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --header-teal:#6fa8ad;
@@ -277,6 +278,7 @@
             <input id="statsEndDate" type="date" class="input-field" style="width:auto;padding:.35rem .6rem;" />
             <button onclick="loadStats()" class="quick-phrase" style="background:var(--header-teal);color:#fff;border-color:var(--header-teal);">查詢</button>
           </div>
+          <button id="statsExportBtn" onclick="exportStatsExcel()" class="quick-phrase ml-auto hidden" style="background:var(--ink-900);color:#fff;border-color:var(--ink-900);">📥 匯出 Excel 報表</button>
         </div>
 
         <div id="statsLoading" class="hidden card text-center text-gray-400 py-10">載入統計資料中...</div>
