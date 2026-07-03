@@ -7,6 +7,11 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbz-loNz21CtD8Q6Vtua4i8m
 const POR_BEDS = Array.from({ length: 18 }, (_, i) => 'POR-' + String(i + 1).padStart(2, '0'));
 const REFRESH_INTERVAL = 30000; // 30 秒
 
+// 「已完成」清單的每日清空時間（24小時制，0 = 午夜00:00）
+// 已完成清單只會顯示「這個時間點之後」完成的紀錄，過了這個時間點就會自動清空重新計算
+// 如需改成其他時間（例如早上6點），把 0 改成 6 即可
+const COMPLETED_LIST_RESET_HOUR = 0;
+
 const QUICK_PHRASES = [
   '使用氧氣筒返室',
   '照完X光',
@@ -33,44 +38,17 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchAll();
   startAutoRefresh();
   startCountdownTicker();
-  scheduleAutoCleanup();
   registerServiceWorker();
 });
 
 function populatePorBedOptions() {
-  refreshPorBedOptions();
-}
-
-// 每次 fetchAll 後重新整理 POR 床號選單，過濾掉目前已占用的床號
-function refreshPorBedOptions() {
   const select = document.getElementById('porBed');
-  const currentVal = select.value;
-
-  // 取得目前待運送中的 POR 床號
-  const occupied = new Set(
-    allRecords
-      .filter(r => r['狀態'] === '待運送' && r['項目類型'] !== '推床')
-      .map(r => r['POR床號'])
-  );
-
-  select.innerHTML = '<option value="">請選擇</option>';
   POR_BEDS.forEach(bed => {
     const opt = document.createElement('option');
     opt.value = bed;
-    if (occupied.has(bed)) {
-      opt.textContent = `${bed} (占用中)`;
-      opt.disabled = true;
-      opt.style.color = '#bbb';
-    } else {
-      opt.textContent = bed;
-    }
+    opt.textContent = bed;
     select.appendChild(opt);
   });
-
-  // 若原本選的還可用就保留，否則清空
-  if (currentVal && !occupied.has(currentVal)) {
-    select.value = currentVal;
-  }
 }
 
 function populateQuickPhrases() {
@@ -98,13 +76,9 @@ function setDefaultArrivalTime() {
   updateExpectedLeavePreview();
 }
 
-// 點擊到達時間欄位時，若欄位為空才帶入現在時間（不強制覆蓋已填入的值）
+// 點擊到達時間欄位時，重新帶入現在時間，方便直接選取（不用往前捲動選擇日期/時間）
 function refreshArrivalTimeToNow() {
-  const input = document.getElementById('arrivalTime');
-  if (!input.value) {
-    input.value = toLocalInputValue(new Date());
-    updateExpectedLeavePreview();
-  }
+  setDefaultArrivalTime();
 }
 
 function bindEvents() {
@@ -239,7 +213,6 @@ async function fetchAll(isManual) {
       pendingPushBedWards.clear();
       renderCurrentTab();
       renderPushBedList();
-      refreshPorBedOptions();
       cacheRecordsOffline(allRecords);
 
       if (res.dashboard) {
@@ -285,30 +258,6 @@ function manualRefresh() {
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(fetchAll, REFRESH_INTERVAL);
-}
-
-/* ===================== 定期清理已完成紀錄 ===================== */
-// 每次APP啟動時檢查，若距上次清理超過2天則自動觸發後端清理
-function scheduleAutoCleanup() {
-  const CLEANUP_INTERVAL_MS = 2 * 24 * 60 * 60 * 1000; // 2天
-  const lastCleanup = localStorage.getItem('por_last_cleanup');
-  const now = Date.now();
-
-  if (!lastCleanup || (now - parseInt(lastCleanup, 10)) > CLEANUP_INTERVAL_MS) {
-    // 延遲5秒執行，避免影響啟動時的資料載入
-    setTimeout(async () => {
-      try {
-        const res = await apiPost({ action: 'cleanupCompleted', daysOld: 2 });
-        if (res && res.success) {
-          localStorage.setItem('por_last_cleanup', String(now));
-          if (res.deleted > 0) {
-            showToast(`🧹 已自動清理 ${res.deleted} 筆舊完成紀錄`, 'info');
-            fetchAll();
-          }
-        }
-      } catch (e) { /* 清理失敗不影響主功能 */ }
-    }, 5000);
-  }
 }
 
 function startCountdownTicker() {
@@ -384,6 +333,18 @@ function getKeyword() {
   return document.getElementById('searchInput').value.trim().toLowerCase();
 }
 
+// 計算「已完成」清單目前這一輪的清空邊界時間
+// 例如 COMPLETED_LIST_RESET_HOUR = 0（午夜），現在是 7/3 08:00 → 邊界是 7/3 00:00
+// 若現在是 7/3 23:00，邊界仍是 7/3 00:00；到了 7/4 00:00 一過，邊界就自動變成 7/4 00:00（等於清空）
+function getCompletedListResetBoundary() {
+  const now = new Date();
+  const boundary = new Date(now.getFullYear(), now.getMonth(), now.getDate(), COMPLETED_LIST_RESET_HOUR, 0, 0, 0);
+  if (now.getTime() < boundary.getTime()) {
+    boundary.setDate(boundary.getDate() - 1);
+  }
+  return boundary;
+}
+
 /* ===================== 待運送清單 ===================== */
 
 function getWaitingRecords() {
@@ -439,38 +400,25 @@ function renderWaitingList() {
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：只看未完成、且本次病人到達後建立的推床紀錄
-    // 已完成的紀錄完全不影響新病人的顯示
-    // 同時也檢查待運送項目本身的推送位置（快捷鍵走 setTransportLocation 時只更新自身）
-    const arrivalTs = arrival ? arrival.getTime() : 0;
-    const pushedToLobbyRecord = r['床位類型'] !== '大床' && (
-      (r['推送位置'] === '大廳' && r['狀態'] !== '已完成') ||
-      allRecords.find(rec => {
-        if (rec['項目類型'] !== '推床') return false;
-        if (rec['狀態'] === '已完成') return false;
-        if (rec['推送位置'] !== '大廳') return false;
-        if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
-        const recTs = parseDate(rec['建立時間']);
-        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000;
-      })
-    );
-    const pushedToRecoveryRecord = r['床位類型'] !== '大床' && (
-      (r['推送位置'] === '恢復室' && r['狀態'] !== '已完成') ||
-      allRecords.find(rec => {
-        if (rec['項目類型'] !== '推床') return false;
-        if (rec['狀態'] === '已完成') return false;
-        if (rec['推送位置'] !== '恢復室') return false;
-        if (String(fixWardBedDisplay(rec['病房床號'])) !== String(fixWardBedDisplay(r['病房床號']))) return false;
-        const recTs = parseDate(rec['建立時間']);
-        return !recTs || recTs.getTime() >= arrivalTs - 5 * 60 * 1000;
-      })
-    );
-    // 問題2：大床已在恢復室時，「已推到-大廳」不再顯示（最終狀態優先）
-    const pushedToLobbyBadge = (pushedToLobbyRecord && !pushedToRecoveryRecord)
+    // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
+    // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
+    const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
+      allRecords.find(rec =>
+        rec['項目類型'] === '推床' &&
+        rec['推送位置'] === '大廳' &&
+        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
+      );
+    const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
+      allRecords.find(rec =>
+        rec['項目類型'] === '推床' &&
+        rec['推送位置'] === '恢復室' &&
+        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
+      );
+    const pushedToLobbyBadge = pushedToLobbyRecord
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
     const pushedToRecoveryBadge = pushedToRecoveryRecord
-      ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 床已推到恢復室</span>`
+      ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 大床在恢復室</span>`
       : '';
 
     const now = new Date();
@@ -491,7 +439,6 @@ function renderWaitingList() {
     const wardBedClass = isSmall ? 'ward-bed-text ward-bed-small-bg' : 'ward-bed-text';
     const typePillClass = isLarge ? 'pill pill-waiting-large' : 'pill pill-waiting-small';
     const typePillStyle = 'font-size:1.15rem; padding:.2rem .75rem;';
-    const typePillHtml = `<span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>`;
 
     const note = r['備註'] ? `<p class="text-xs text-gray-400 mt-1">📋 ${escapeHtml(r['備註']).replace(/\n/g, '、')}</p>` : '';
 
@@ -505,7 +452,7 @@ function renderWaitingList() {
           <p class="text-xs text-gray-400 mb-0.5 waiting-item-label">病房床號 / 類型</p>
           <div class="flex items-center gap-2 flex-wrap">
             <span class="${wardBedClass}">${escapeHtml(fixWardBedDisplay(r['病房床號']) || '—')}</span>
-            ${typePillHtml}
+            <span class="${typePillClass}" style="${typePillStyle}">${escapeHtml(r['床位類型'] || '')}</span>
             ${pushedToLobbyBadge}
             ${pushedToRecoveryBadge}
           </div>
@@ -518,8 +465,6 @@ function renderWaitingList() {
         <div class="text-right flex-shrink-0 flex flex-col items-end gap-2">
           <p class="font-bold ${statusClass} waiting-item-text">${statusLabel}</p>
           <p class="text-gray-400 waiting-item-label">已等候: ${elapsedMin} 分鐘</p>
-          ${pushedToLobbyRecord && !pushedToRecoveryRecord ? `
-          <button onclick="markBedToRecovery('${r.ID}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-edit" style="background:#e3edf7;color:var(--teal-700);border-color:#c5daea;white-space:nowrap;">🛏️ 床已推到恢復室</button>` : ''}
           <div class="flex gap-2">
             <button onclick='openEditModal(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="btn-edit">✏️ 編輯</button>
             <button onclick="openCompleteModal('${r.ID}', '${escapeHtml(r['POR床號'])}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-complete">🚀 接送完成</button>
@@ -534,8 +479,9 @@ function renderWaitingList() {
 
 function getLobbyRecords() {
   const keyword = getKeyword();
-  let records = allRecords.filter(r => r['推送位置'] === '大廳' &&
-    (r['狀態'] === '待運送' || r['狀態'] === '已推送'));
+  // 大廳候床：只要狀態是「已完成」（接送完成 或 推床已移除）就一律不再顯示於大廳，
+  // 不論當初的狀態文字是「待運送」「已推送」還是其他中繼狀態
+  let records = allRecords.filter(r => r['推送位置'] === '大廳' && r['狀態'] !== '已完成');
   if (keyword) {
     records = records.filter(r => matchesKeyword(r, keyword));
   }
@@ -611,42 +557,17 @@ async function moveToRecoveryRoom(id, isPushBed) {
   }
 }
 
-// 待運送面板快捷鍵：直接標記「床已推到恢復室」
-// 路徑1：找到相同病房床號的推床紀錄（在大廳），改為恢復室
-// 路徑2：找不到推床紀錄時，直接更新待運送項目本身的推送位置
-async function markBedToRecovery(transportId, wardBed) {
-  // 找對應的推床紀錄（推送位置=大廳，不限狀態，含已完成）
-  const pushRec = allRecords.find(rec =>
-    rec['項目類型'] === '推床' &&
-    rec['推送位置'] === '大廳' &&
-    String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
-  );
-
-  try {
-    let res;
-    if (pushRec) {
-      // 有推床紀錄：更新推床位置為恢復室
-      res = await apiPost({ action: 'setPushLocation', id: pushRec.ID, location: '恢復室' });
-    } else {
-      // 無推床紀錄（可能已被合併完成）：直接更新待運送項目的推送位置
-      res = await apiPost({ action: 'setTransportLocation', id: transportId, location: '恢復室' });
-    }
-    if (res.success) {
-      showToast('🛏️ 已標記：床已推到恢復室', 'success');
-      fetchAll();
-    } else {
-      showToast(res.message || '操作失敗', 'error');
-    }
-  } catch (err) {
-    showToast('連線失敗，請稍後再試', 'error');
-  }
-}
-
 /* ===================== 已完成清單 ===================== */
 
 function getCompletedRecords() {
   const keyword = getKeyword();
+  const resetBoundary = getCompletedListResetBoundary();
   let records = allRecords.filter(r => r['項目類型'] !== '推床' && r['狀態'] === '已完成');
+  // 已完成清單每日定時清空（預設午夜00:00）：只顯示邊界時間之後完成的紀錄
+  records = records.filter(r => {
+    const complete = parseDate(r['完成時間']);
+    return complete && complete.getTime() >= resetBoundary.getTime();
+  });
   if (keyword) {
     records = records.filter(r => matchesKeyword(r, keyword));
   }
@@ -752,11 +673,9 @@ async function handleEditSubmit(e) {
     '備註': document.getElementById('editNote').value
   };
 
-  // 只有有填預計離開時間才更新，使用本地時間格式避免UTC時差問題
+  // 只有有填預計離開時間才更新
   if (expectedLeaveVal) {
-    const d = new Date(expectedLeaveVal);
-    const pad = n => String(n).padStart(2, '0');
-    fields['預計離開時間'] = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+    fields['預計離開時間'] = new Date(expectedLeaveVal).toISOString().replace('T', ' ').substring(0, 19);
   }
 
   try {
@@ -819,18 +738,22 @@ async function handleAddSubmit(e) {
     if (res.success) {
       // 小床病人若已填寫病房床號，自動建立「待推大床」需求，
       // 不需工作人員再到下方表單手動重複輸入一次
-      // 例外：若該床號已存在於大廳候床（推送位置=大廳），代表大床已推出，不需再建立
       let pushBedCreated = false;
-      if (bedType === '小床' && wardBed && !pendingPushBedWards.has(wardBed)) {
-        pendingPushBedWards.add(wardBed);
-        try {
-          // 直接送後端，由後端判斷是否已有推床紀錄（前端 allRecords 可能是舊資料）
-          const pushRes = await apiPost({ action: 'addPushBed', wardBed });
-          // success=true 代表新建立；skipped=true 代表已有紀錄略過，兩者都算正常
-          pushBedCreated = !!(pushRes && pushRes.success);
-          if (!pushRes || (!pushRes.success && !pushRes.skipped)) pendingPushBedWards.delete(wardBed);
-        } catch (pushErr) {
-          pendingPushBedWards.delete(wardBed);
+      if (bedType === '小床' && wardBed) {
+        const dup = allRecords.find(rec =>
+          rec['項目類型'] === '推床' &&
+          rec['狀態'] === '待推送' &&
+          String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
+        );
+        if (!dup && !pendingPushBedWards.has(wardBed)) {
+          pendingPushBedWards.add(wardBed);
+          try {
+            const pushRes = await apiPost({ action: 'addPushBed', wardBed });
+            pushBedCreated = !!(pushRes && pushRes.success);
+            if (!pushBedCreated) pendingPushBedWards.delete(wardBed);
+          } catch (pushErr) {
+            pendingPushBedWards.delete(wardBed);
+          }
         }
       }
 
