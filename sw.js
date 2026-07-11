@@ -4,7 +4,7 @@
 
 // ★ 每次更新檔案後，請把下方版本號+1（例如 v2 → v3）
 // 這樣所有已安裝的APP會在下次開啟時自動更新到最新版
-const CACHE_VERSION = 'v21';
+const CACHE_VERSION = 'v26';
 const CACHE_NAME = 'por-transport-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
