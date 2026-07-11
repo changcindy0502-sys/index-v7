@@ -409,7 +409,7 @@ function renderWaitingList() {
 
     // 若病房床號與「待推大床」清單中尚未推送的床號相同，強制以紅色提示尚有床需先推
     // 大床類型不需提示（病人已躺在大床上，不用再推）
-    const pendingPushBeds = allRecords.filter(rec => rec['項目類型'] === '推床' && rec['狀態'] === '待推送');
+    const pendingPushBeds = allRecords.filter(rec => rec['項目類型'] === '推床' && rec['狀態'] === '待推送' && !rec['推送位置']);
     const wardBedMatch = r['床位類型'] !== '大床' &&
       pendingPushBeds.some(rec => String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號'])));
     let pushAlert = '';
@@ -560,7 +560,10 @@ async function moveToRecoveryRoom(id, isPushBed) {
   try {
     let res;
     if (isPushBed) {
-      res = await apiPost({ action: 'setPushLocation', id, location: '恢復室' });
+      // 推床送達恢復室後視為完成，狀態、推送位置、完成時間一併更新，
+      // 避免床號一直卡在中繼狀態，也讓它之後能被每日封存機制正確清走
+      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      res = await apiPost({ action: 'update', id, fields: { '推送位置': '恢復室', '狀態': '已完成', '完成時間': nowStr } });
     } else {
       res = await apiPost({ action: 'setTransportLocation', id, location: '恢復室' });
     }
@@ -761,6 +764,7 @@ async function handleAddSubmit(e) {
         const dup = allRecords.find(rec =>
           rec['項目類型'] === '推床' &&
           rec['狀態'] === '待推送' &&
+          !rec['推送位置'] &&
           String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
         );
         if (!dup && !pendingPushBedWards.has(wardBed)) {
@@ -834,7 +838,9 @@ async function confirmComplete(id) {
 /* ===================== 待推大床 ===================== */
 
 function getPushBedRecords() {
-  return allRecords.filter(r => r['項目類型'] === '推床' && r['狀態'] === '待推送');
+  // 只有「還沒被推到任何位置」的才算真正待推送；一旦推送位置被標記（大廳／恢復室），
+  // 就不再佔用待推大床清單，讓同一個病房床號可以重新新增推床需求
+  return allRecords.filter(r => r['項目類型'] === '推床' && r['狀態'] === '待推送' && !r['推送位置']);
 }
 
 function renderPushBedList() {
@@ -891,10 +897,12 @@ async function handlePushBedSubmit(e) {
     return;
   }
 
-  // 防呆：檢查是否已存在相同床號的「待推送」項目（含尚未確認的暫存）
+  // 防呆：檢查是否已存在相同床號、且「還沒被推到任何位置」的待推送項目（含尚未確認的暫存）
+  // 已經推到大廳/恢復室的舊項目不算佔用，允許針對同一床號重新新增推床需求
   const duplicate = allRecords.find(r =>
     r['項目類型'] === '推床' &&
     r['狀態'] === '待推送' &&
+    !r['推送位置'] &&
     String(fixWardBedDisplay(r['病房床號'])) === String(wardBed)
   );
   if (duplicate || pendingPushBedWards.has(wardBed)) {
@@ -936,7 +944,9 @@ async function setPushBedLocation(id, location) {
 
 async function completePushBed(id) {
   try {
-    const res = await apiPost({ action: 'update', id, fields: { '狀態': '已完成' } });
+    // 補上完成時間，讓這筆紀錄之後能被每日午夜的封存機制正確清走，不會一直卡在主表
+    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const res = await apiPost({ action: 'update', id, fields: { '狀態': '已完成', '完成時間': nowStr } });
     if (res.success) {
       showToast('已完成，從清單中移除', 'success');
       fetchAll();
