@@ -36,6 +36,8 @@ const pendingPushBedWards = new Set();
 document.addEventListener('DOMContentLoaded', () => {
   populatePorBedOptions();
   populateQuickPhrases();
+  populateHourMinuteSelects('arrivalHour', 'arrivalMinute');
+  populateHourMinuteSelects('editExpectedLeaveHour', 'editExpectedLeaveMinute');
   setDefaultArrivalTime();
   bindEvents();
   fetchAll();
@@ -43,6 +45,43 @@ document.addEventListener('DOMContentLoaded', () => {
   startCountdownTicker();
   registerServiceWorker();
 });
+
+// 自製 24 小時制的小時/分鐘下拉選單，取代瀏覽器原生 datetime-local
+// （原生元件的 12/24 小時制顯示，是跟著瀏覽器/裝置語言設定走，網頁無法保證覆蓋，
+//   自己刻的下拉選單則保證任何瀏覽器、任何裝置都是 24 小時制、不會出現上午/下午選項）
+function populateHourMinuteSelects(hourId, minuteId) {
+  const hourSelect = document.getElementById(hourId);
+  const minuteSelect = document.getElementById(minuteId);
+  for (let h = 0; h < 24; h++) {
+    const opt = document.createElement('option');
+    opt.value = String(h).padStart(2, '0');
+    opt.textContent = String(h).padStart(2, '0');
+    hourSelect.appendChild(opt);
+  }
+  for (let m = 0; m < 60; m++) {
+    const opt = document.createElement('option');
+    opt.value = String(m).padStart(2, '0');
+    opt.textContent = String(m).padStart(2, '0');
+    minuteSelect.appendChild(opt);
+  }
+}
+
+// 把 Date 物件拆分寫入「日期 + 小時 + 分鐘」三個欄位
+function setDateTimeFields(dateId, hourId, minuteId, date) {
+  document.getElementById(dateId).value = toDateInputValue(date);
+  document.getElementById(hourId).value = String(date.getHours()).padStart(2, '0');
+  document.getElementById(minuteId).value = String(date.getMinutes()).padStart(2, '0');
+}
+
+// 把「日期 + 小時 + 分鐘」三個欄位合併讀取成一個 Date 物件（本地時間）
+function getDateTimeFieldsValue(dateId, hourId, minuteId) {
+  const dateStr = document.getElementById(dateId).value;
+  if (!dateStr) return null;
+  const hour = document.getElementById(hourId).value || '00';
+  const minute = document.getElementById(minuteId).value || '00';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d, Number(hour), Number(minute), 0, 0);
+}
 
 function populatePorBedOptions() {
   const select = document.getElementById('porBed');
@@ -96,20 +135,19 @@ function togglePhrase(el) {
 }
 
 function setDefaultArrivalTime() {
-  const input = document.getElementById('arrivalTime');
-  input.value = toLocalInputValue(new Date());
+  setDateTimeFields('arrivalDate', 'arrivalHour', 'arrivalMinute', new Date());
   updateExpectedLeavePreview();
 }
 
-// 點擊到達時間欄位時，重新帶入現在時間，方便直接選取（不用往前捲動選擇日期/時間）
+// 點「設為現在」按鈕時，重新帶入現在時間，方便直接選取
 function refreshArrivalTimeToNow() {
   setDefaultArrivalTime();
 }
 
 function bindEvents() {
-  document.getElementById('arrivalTime').addEventListener('change', updateExpectedLeavePreview);
-  // 只要點進到達時間欄位，就先帶入現在時間供選取，避免表單放著太久時間過期
-  document.getElementById('arrivalTime').addEventListener('focus', refreshArrivalTimeToNow);
+  ['arrivalDate', 'arrivalHour', 'arrivalMinute'].forEach(id => {
+    document.getElementById(id).addEventListener('change', updateExpectedLeavePreview);
+  });
   document.getElementById('addForm').addEventListener('submit', handleAddSubmit);
   document.getElementById('searchInput').addEventListener('input', renderCurrentTab);
   document.getElementById('wardBed').addEventListener('blur', (e) => {
@@ -168,6 +206,15 @@ function parseDate(str) {
   return new Date(str.replace(' ', 'T'));
 }
 
+// 格式化為 'yyyy-MM-dd HH:mm:ss'，使用瀏覽器「本地時間」而非 UTC。
+// 絕對不要用 date.toISOString() 來產生要存進 Google Sheet 的時間字串——
+// toISOString() 會轉成 UTC（跟台灣時間差8小時），但這個系統其他地方
+// 讀取時間字串時都是當作本地時間解讀，兩邊對不起來就會出現「超時異常」等離譜的時間差。
+function toLocalDateTimeString(date) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function formatTime(date) {
   if (!date) return '—';
   const pad = n => String(n).padStart(2, '0');
@@ -181,12 +228,11 @@ function formatDateTime(date) {
 }
 
 function updateExpectedLeavePreview() {
-  const arrivalVal = document.getElementById('arrivalTime').value;
-  if (!arrivalVal) {
+  const arrival = getDateTimeFieldsValue('arrivalDate', 'arrivalHour', 'arrivalMinute');
+  if (!arrival) {
     document.getElementById('expectedLeavePreview').textContent = '—';
     return;
   }
-  const arrival = new Date(arrivalVal);
   const leave = new Date(arrival.getTime() + 45 * 60 * 1000);
   document.getElementById('expectedLeavePreview').textContent = formatTime(leave);
 }
@@ -442,27 +488,15 @@ function renderWaitingList() {
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
-    // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
-    // 注意：只看「還沒完成」的推床紀錄，排除已完成的歷史紀錄，避免同一床號舊資料的痕跡被誤判成目前狀態
-    const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
-      allRecords.find(rec =>
-        rec['項目類型'] === '推床' &&
-        rec['狀態'] !== '已完成' &&
-        rec['推送位置'] === '大廳' &&
-        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
-      );
-    const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
-      allRecords.find(rec =>
-        rec['項目類型'] === '推床' &&
-        rec['狀態'] !== '已完成' &&
-        rec['推送位置'] === '恢復室' &&
-        String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
-      );
-    const pushedToLobbyBadge = pushedToLobbyRecord
+    // 連動：後端在推床被推送時，若有相同病房床號的「待運送」病人紀錄，
+    // 會直接把「推送位置」寫在病人紀錄自己身上（推床那筆則會立刻被標記完成、不再單獨存在），
+    // 所以這裡要直接看病人紀錄自己的推送位置欄位，而不是去找另一筆推床紀錄
+    const isLinkedToLobby = r['床位類型'] !== '大床' && r['推送位置'] === '大廳';
+    const isLinkedToRecovery = r['床位類型'] !== '大床' && r['推送位置'] === '恢復室';
+    const pushedToLobbyBadge = isLinkedToLobby
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
-    const pushedToRecoveryBadge = pushedToRecoveryRecord
+    const pushedToRecoveryBadge = isLinkedToRecovery
       ? `<span class="pill" style="background:#e3edf7;color:var(--teal-700);">🛏️ 大床在恢復室</span>`
       : '';
 
@@ -512,6 +546,7 @@ function renderWaitingList() {
           <p class="text-gray-400 waiting-item-label">已等候: ${elapsedMin} 分鐘</p>
           <div class="flex gap-2">
             <button onclick='openEditModal(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="btn-edit">✏️ 編輯</button>
+            ${isLinkedToLobby ? `<button onclick="moveToRecoveryRoom('${r.ID}', false)" class="btn-edit" style="background:var(--teal-700);color:#fff;border-color:var(--teal-700);">🛏️ 床到恢復室</button>` : ''}
             <button onclick="openCompleteModal('${r.ID}', '${escapeHtml(r['POR床號'])}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-complete">🚀 接送完成</button>
           </div>
         </div>
@@ -589,8 +624,7 @@ async function moveToRecoveryRoom(id, isPushBed) {
     if (isPushBed) {
       // 推床送達恢復室後視為完成，狀態、推送位置、完成時間一併更新，
       // 避免床號一直卡在中繼狀態，也讓它之後能被每日封存機制正確清走
-      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      res = await apiPost({ action: 'update', id, fields: { '推送位置': '恢復室', '狀態': '已完成', '完成時間': nowStr } });
+      const nowStr = toLocalDateTimeString(new Date());
     } else {
       res = await apiPost({ action: 'setTransportLocation', id, location: '恢復室' });
     }
@@ -688,7 +722,13 @@ function openEditModal(record) {
   // 預計離開時間預填（可修改）；若原始資料格式異常導致無法解析，留空避免顯示無效值
   const expectedLeave = parseDate(record['預計離開時間']);
   const validExpectedLeave = expectedLeave && !isNaN(expectedLeave.getTime()) ? expectedLeave : null;
-  document.getElementById('editExpectedLeave').value = validExpectedLeave ? toLocalInputValue(validExpectedLeave) : '';
+  if (validExpectedLeave) {
+    setDateTimeFields('editExpectedLeaveDate', 'editExpectedLeaveHour', 'editExpectedLeaveMinute', validExpectedLeave);
+  } else {
+    document.getElementById('editExpectedLeaveDate').value = '';
+    document.getElementById('editExpectedLeaveHour').value = '';
+    document.getElementById('editExpectedLeaveMinute').value = '';
+  }
   document.getElementById('editModal').classList.remove('hidden');
 }
 
@@ -696,23 +736,21 @@ function closeEditModal() {
   document.getElementById('editModal').classList.add('hidden');
 }
 
-// 快速調整「預計離開時間」，作為原生 datetime-local 選擇器在部分裝置上操作不順時的備援方式
+// 快速調整「預計離開時間」，方便不想一格一格重新選的情況
 function adjustEditExpectedLeave(deltaMinutes) {
-  const input = document.getElementById('editExpectedLeave');
-  const base = input.value ? new Date(input.value) : new Date();
-  const baseValid = !isNaN(base.getTime()) ? base : new Date();
-  const updated = new Date(baseValid.getTime() + deltaMinutes * 60000);
-  input.value = toLocalInputValue(updated);
+  const base = getDateTimeFieldsValue('editExpectedLeaveDate', 'editExpectedLeaveHour', 'editExpectedLeaveMinute') || new Date();
+  const updated = new Date(base.getTime() + deltaMinutes * 60000);
+  setDateTimeFields('editExpectedLeaveDate', 'editExpectedLeaveHour', 'editExpectedLeaveMinute', updated);
 }
 
-function resetEditExpectedLeaveToNowPlus45() {
-  document.getElementById('editExpectedLeave').value = toLocalInputValue(new Date(Date.now() + 45 * 60000));
+function resetEditExpectedLeaveToNowPlus30() {
+  setDateTimeFields('editExpectedLeaveDate', 'editExpectedLeaveHour', 'editExpectedLeaveMinute', new Date(Date.now() + 30 * 60000));
 }
 
 async function handleEditSubmit(e) {
   e.preventDefault();
   const id = document.getElementById('editId').value;
-  const expectedLeaveVal = document.getElementById('editExpectedLeave').value;
+  const expectedLeaveDate = getDateTimeFieldsValue('editExpectedLeaveDate', 'editExpectedLeaveHour', 'editExpectedLeaveMinute');
 
   const fields = {
     'POR床號': document.getElementById('editPorBed').value,
@@ -722,8 +760,8 @@ async function handleEditSubmit(e) {
   };
 
   // 只有有填預計離開時間才更新
-  if (expectedLeaveVal) {
-    fields['預計離開時間'] = new Date(expectedLeaveVal).toISOString().replace('T', ' ').substring(0, 19);
+  if (expectedLeaveDate) {
+    fields['預計離開時間'] = toLocalDateTimeString(expectedLeaveDate);
   }
 
   try {
@@ -749,11 +787,16 @@ async function handleAddSubmit(e) {
   const wardBed = formatWardBed(wardBedInput.value.trim());
   wardBedInput.value = wardBed;
   const bedType = document.getElementById('bedType').value;
-  const arrivalVal = document.getElementById('arrivalTime').value;
+  const arrivalDate = getDateTimeFieldsValue('arrivalDate', 'arrivalHour', 'arrivalMinute');
   const note = document.getElementById('note').value.trim();
 
   if (!porBed) {
     showToast('請選擇 POR床號', 'error');
+    return;
+  }
+
+  if (!arrivalDate) {
+    showToast('請選擇到達時間', 'error');
     return;
   }
 
@@ -780,7 +823,7 @@ async function handleAddSubmit(e) {
       porBed,
       wardBed,
       bedType,
-      arrivalTime: new Date(arrivalVal).toISOString(),
+      arrivalTime: arrivalDate.toISOString(),
       note
     });
     if (res.success) {
@@ -970,7 +1013,7 @@ async function setPushBedLocation(id, location) {
 async function completePushBed(id) {
   try {
     // 補上完成時間，讓這筆紀錄之後能被每日午夜的封存機制正確清走，不會一直卡在主表
-    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const nowStr = toLocalDateTimeString(new Date());
     const res = await apiPost({ action: 'update', id, fields: { '狀態': '已完成', '完成時間': nowStr } });
     if (res.success) {
       showToast('已完成，從清單中移除', 'success');
