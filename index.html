@@ -197,8 +197,16 @@
             <p class="text-[11px] text-gray-400 mt-1">輸入4位數字＝單人套房床號，直接顯示（如 2111）；輸入5位數字且最後一位為1/2/3，自動轉為「之X」床號（如 11121 → 1112-1）</p>
           </div>
           <div>
-            <label class="block text-xs font-bold text-gray-500 mb-1">🕐 到達時間</label>
-            <input id="arrivalTime" type="datetime-local" required class="input-field" />
+            <label class="block text-xs font-bold text-gray-500 mb-1 flex items-center justify-between">
+              <span>🕐 到達時間</span>
+              <button type="button" onclick="refreshArrivalTimeToNow()" class="loc-select" style="cursor:pointer; font-weight:700;">設為現在</button>
+            </label>
+            <div class="flex gap-2">
+              <input id="arrivalDate" type="date" required class="input-field" style="flex:2;" />
+              <select id="arrivalHour" required class="input-field" style="flex:1;"></select>
+              <span class="flex items-center text-gray-400">:</span>
+              <select id="arrivalMinute" required class="input-field" style="flex:1;"></select>
+            </div>
           </div>
           <div class="bg-[#eef2e3] rounded-lg px-4 py-2.5 flex justify-between items-center text-sm">
             <span class="font-bold text-gray-600">🚀 預計離開時間 (+45分)</span>
@@ -373,13 +381,19 @@
       </div>
       <div>
         <label class="block text-xs font-bold text-gray-500 mb-1">預計離開時間</label>
-        <input id="editExpectedLeave" type="datetime-local" class="input-field" />
-        <div class="flex gap-2 mt-2">
-          <button type="button" onclick="adjustEditExpectedLeave(-15)" class="loc-select" style="cursor:pointer;">-15分</button>
-          <button type="button" onclick="adjustEditExpectedLeave(15)" class="loc-select" style="cursor:pointer;">+15分</button>
-          <button type="button" onclick="resetEditExpectedLeaveToNowPlus45()" class="loc-select" style="cursor:pointer;">設為現在+45分</button>
+        <div class="flex gap-2">
+          <input id="editExpectedLeaveDate" type="date" class="input-field" style="flex:2;" />
+          <select id="editExpectedLeaveHour" class="input-field" style="flex:1;"></select>
+          <span class="flex items-center text-gray-400">:</span>
+          <select id="editExpectedLeaveMinute" class="input-field" style="flex:1;"></select>
         </div>
-        <p class="text-[11px] text-gray-400 mt-1">不修改請留空（留空將保持原本時間）；若選擇器點選不順，可使用上方按鈕快速調整</p>
+        <div class="flex gap-2 mt-2">
+          <button type="button" onclick="adjustEditExpectedLeave(5)" class="loc-select" style="cursor:pointer;">+5分</button>
+          <button type="button" onclick="adjustEditExpectedLeave(10)" class="loc-select" style="cursor:pointer;">+10分</button>
+          <button type="button" onclick="adjustEditExpectedLeave(15)" class="loc-select" style="cursor:pointer;">+15分</button>
+          <button type="button" onclick="resetEditExpectedLeaveToNowPlus30()" class="loc-select" style="cursor:pointer;">設定現在時間+30分</button>
+        </div>
+        <p class="text-[11px] text-gray-400 mt-1">已預填目前的時間（24小時制），確認無誤可直接儲存；也可用上方按鈕快速調整</p>
       </div>
       <div>
         <label class="block text-xs font-bold text-gray-500 mb-1">備註</label>
