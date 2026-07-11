@@ -488,11 +488,23 @@ function renderWaitingList() {
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：後端在推床被推送時，若有相同病房床號的「待運送」病人紀錄，
-    // 會直接把「推送位置」寫在病人紀錄自己身上（推床那筆則會立刻被標記完成、不再單獨存在），
-    // 所以這裡要直接看病人紀錄自己的推送位置欄位，而不是去找另一筆推床紀錄
-    const isLinkedToLobby = r['床位類型'] !== '大床' && r['推送位置'] === '大廳';
-    const isLinkedToRecovery = r['床位類型'] !== '大床' && r['推送位置'] === '恢復室';
+    // 連動：後端在推床被推送時，若當下就有相同病房床號的「待運送」病人紀錄，
+    // 會直接把「推送位置」寫在病人紀錄自己身上（推床那筆則會立刻被標記完成）。
+    // 但這是「當下那一瞬間」的比對，如果推床發生時病人紀錄還沒建立（時間差），
+    // 就不會連動成功，推床會維持「已推送」獨立存在。這裡兩種情況都要照顧到：
+    // 先看病人紀錄自己的推送位置，沒有的話再找有沒有一筆還沒完成、獨立存在的推床紀錄。
+    const ownLocation = r['推送位置'] || '';
+    const linkedPushBed = r['床位類型'] !== '大床' && !ownLocation
+      ? allRecords.find(rec =>
+          rec['項目類型'] === '推床' &&
+          rec['狀態'] !== '已完成' &&
+          rec['推送位置'] &&
+          String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
+        )
+      : null;
+    const effectiveLocation = ownLocation || (linkedPushBed ? linkedPushBed['推送位置'] : '');
+    const isLinkedToLobby = r['床位類型'] !== '大床' && effectiveLocation === '大廳';
+    const isLinkedToRecovery = r['床位類型'] !== '大床' && effectiveLocation === '恢復室';
     const pushedToLobbyBadge = isLinkedToLobby
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
@@ -546,7 +558,7 @@ function renderWaitingList() {
           <p class="text-gray-400 waiting-item-label">已等候: ${elapsedMin} 分鐘</p>
           <div class="flex gap-2">
             <button onclick='openEditModal(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="btn-edit">✏️ 編輯</button>
-            ${isLinkedToLobby ? `<button onclick="moveToRecoveryRoom('${r.ID}', false)" class="btn-edit" style="background:var(--teal-700);color:#fff;border-color:var(--teal-700);">🛏️ 床到恢復室</button>` : ''}
+            ${isLinkedToLobby ? `<button onclick="moveToRecoveryRoom('${linkedPushBed ? linkedPushBed.ID : r.ID}', ${linkedPushBed ? 'true' : 'false'})" class="btn-edit" style="background:var(--teal-700);color:#fff;border-color:var(--teal-700);">🛏️ 床到恢復室</button>` : ''}
             <button onclick="openCompleteModal('${r.ID}', '${escapeHtml(r['POR床號'])}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-complete">🚀 接送完成</button>
           </div>
         </div>
