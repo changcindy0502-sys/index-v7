@@ -54,6 +54,28 @@ function populatePorBedOptions() {
   });
 }
 
+// 依目前佔床狀況，把已經有病人在「待運送」中的 POR 床反白（disabled）並標註「使用中」，
+// 避免人員誤選已經有人在使用的床位
+function updatePorBedAvailability() {
+  const select = document.getElementById('porBed');
+  const options = select.querySelectorAll('option[value^="POR-"]');
+  let selectedNowOccupied = false;
+
+  options.forEach(opt => {
+    const bed = opt.value;
+    const occupied = allRecords.some(r => r['POR床號'] === bed && r['狀態'] === '待運送' && r['項目類型'] !== '推床');
+    opt.disabled = occupied;
+    opt.textContent = occupied ? `${bed}（使用中）` : bed;
+    if (occupied && select.value === bed) selectedNowOccupied = true;
+  });
+
+  // 如果背景刷新時，剛好使用者選到的床變成佔用中，清空選擇並提醒，避免誤送出
+  if (selectedNowOccupied) {
+    select.value = '';
+    showToast('您選擇的 POR 床剛被佔用，請重新選擇', 'error');
+  }
+}
+
 function populateQuickPhrases() {
   const container = document.getElementById('quickPhrases');
   container.innerHTML = QUICK_PHRASES.map(p =>
@@ -224,6 +246,7 @@ async function fetchAll(isManual) {
       pendingPushBedWards.clear();
       renderCurrentTab();
       renderPushBedList();
+      updatePorBedAvailability();
       cacheRecordsOffline(allRecords);
 
       if (res.dashboard) {
@@ -294,6 +317,7 @@ function loadCachedRecords() {
       allRecords = JSON.parse(cached);
       renderCurrentTab();
       renderPushBedList();
+      updatePorBedAvailability();
     }
   } catch (e) { /* ignore */ }
 }
@@ -420,15 +444,18 @@ function renderWaitingList() {
 
     // 連動：若「待推大床」清單中相同病房床號的推床已被標記推送位置，
     // 此待運送項目需自動顯示對應狀態（已推到-大廳 / 大床在恢復室），不需工作人員再手動選取
+    // 注意：只看「還沒完成」的推床紀錄，排除已完成的歷史紀錄，避免同一床號舊資料的痕跡被誤判成目前狀態
     const pushedToLobbyRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
+        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '大廳' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
     const pushedToRecoveryRecord = r['床位類型'] !== '大床' &&
       allRecords.find(rec =>
         rec['項目類型'] === '推床' &&
+        rec['狀態'] !== '已完成' &&
         rec['推送位置'] === '恢復室' &&
         String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
       );
@@ -763,8 +790,7 @@ async function handleAddSubmit(e) {
       if (bedType === '小床' && wardBed) {
         const dup = allRecords.find(rec =>
           rec['項目類型'] === '推床' &&
-          rec['狀態'] === '待推送' &&
-          !rec['推送位置'] &&
+          rec['狀態'] !== '已完成' &&
           String(fixWardBedDisplay(rec['病房床號'])) === String(wardBed)
         );
         if (!dup && !pendingPushBedWards.has(wardBed)) {
@@ -897,12 +923,11 @@ async function handlePushBedSubmit(e) {
     return;
   }
 
-  // 防呆：檢查是否已存在相同床號、且「還沒被推到任何位置」的待推送項目（含尚未確認的暫存）
-  // 已經推到大廳/恢復室的舊項目不算佔用，允許針對同一床號重新新增推床需求
+  // 防重複的唯一規則：只要該床號還有一筆「狀態 ≠ 已完成」的推床紀錄，就視為佔用
+  // （不管在待推送、還是已推到大廳/恢復室，只要還沒完成都算佔用；跟後端邏輯統一）
   const duplicate = allRecords.find(r =>
     r['項目類型'] === '推床' &&
-    r['狀態'] === '待推送' &&
-    !r['推送位置'] &&
+    r['狀態'] !== '已完成' &&
     String(fixWardBedDisplay(r['病房床號'])) === String(wardBed)
   );
   if (duplicate || pendingPushBedWards.has(wardBed)) {
