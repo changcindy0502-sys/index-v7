@@ -919,9 +919,9 @@ async function confirmComplete(id) {
 /* ===================== 待推大床 ===================== */
 
 function getPushBedRecords() {
-  // 只有「還沒被推到任何位置」的才算真正待推送；一旦推送位置被標記（大廳／恢復室），
-  // 就不再佔用待推大床清單，讓同一個病房床號可以重新新增推床需求
-  return allRecords.filter(r => r['項目類型'] === '推床' && r['狀態'] === '待推送' && !r['推送位置']);
+  // 顯示所有「還沒完成」的推床——不管是真正待推送、還是已推到大廳/恢復室但還沒被結案，
+  // 都要能在這個清單被看到、被處理，避免有紀錄卡住卻沒有任何畫面能看到它、造成無法新增的假象
+  return allRecords.filter(r => r['項目類型'] === '推床' && r['狀態'] !== '已完成');
 }
 
 function renderPushBedList() {
@@ -950,11 +950,23 @@ function renderPushBedList() {
       ? `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此床病人已在恢復室，請優先推此大床</p>`
       : '';
 
+    // 依目前推送位置顯示對應狀態標籤：還沒推 / 已推到大廳（獨立，未連動）/ 已推到恢復室（獨立，未連動）
+    const location = r['推送位置'] || '';
+    let statusLabel = '待推送';
+    let statusStyle = 'background:#fdf3d3;color:#a9802e;';
+    if (location === '大廳') {
+      statusLabel = '已推送-大廳';
+      statusStyle = 'background:#e3f4ee;color:var(--green-600);';
+    } else if (location === '恢復室') {
+      statusLabel = '已推送-恢復室';
+      statusStyle = 'background:#e3edf7;color:var(--teal-700);';
+    }
+
     return `
       <div class="card p-3 flex items-center justify-between gap-2" style="background:#f7f8f3;">
         <div>
           <span class="ward-bed-text" style="${wardBedStyle}">${escapeHtml(fixWardBedDisplay(r['病房床號']))}</span>
-          <span class="ml-2 pill" style="background:#fdf3d3;color:#a9802e;">待推送</span>
+          <span class="ml-2 pill" style="${statusStyle}">${statusLabel}</span>
           ${alert}
           <div class="flex gap-1 mt-2">
             <button onclick="setPushBedLocation('${r.ID}', '大廳')" class="loc-select" style="cursor:pointer;">推到大廳</button>
