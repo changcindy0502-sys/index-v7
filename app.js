@@ -592,13 +592,20 @@ function renderWaitingList() {
   }).join('');
 }
 
-/* ===================== 大廳候床清單 ===================== */
+/* ===================== 已推床清單 ===================== */
 
 function getLobbyRecords() {
   const keyword = getKeyword();
-  // 大廳候床：只要狀態是「已完成」（接送完成 或 推床已移除）就一律不再顯示於大廳，
-  // 不論當初的狀態文字是「待運送」「已推送」還是其他中繼狀態
-  let records = allRecords.filter(r => r['推送位置'] === '大廳' && r['狀態'] !== '已完成');
+  // 已推床清單：顯示所有「已經被推到某個位置、但還沒結案」的紀錄
+  // - 推床本身：大廳、恢復室都要顯示，讓卡在恢復室沒連動成功的（幽靈紀錄）也能被看到、處理
+  // - 病人運送紀錄：只在「大廳」階段顯示；一旦到了恢復室，病人本身的完成流程交給「待運送」分頁的
+  //   「接送完成」按鈕處理，這裡不重複顯示、也不需要動作按鈕
+  let records = allRecords.filter(r => {
+    if (r['狀態'] === '已完成') return false;
+    if (!r['推送位置']) return false;
+    if (r['項目類型'] === '推床') return true;
+    return r['推送位置'] === '大廳';
+  });
   if (keyword) {
     records = records.filter(r => matchesKeyword(r, keyword));
   }
@@ -621,6 +628,7 @@ function renderLobbyList() {
 
   container.innerHTML = records.map(r => {
     const isPushBed = r['項目類型'] === '推床';
+    const atRecovery = r['推送位置'] === '恢復室';
     const isSmall = r['床位類型'] === '小床';
     const wardBedClass = isSmall ? 'ward-bed-text ward-bed-small-bg' : 'ward-bed-text';
     const typePillClass = r['床位類型'] === '大床' ? 'pill pill-large' : 'pill pill-small';
@@ -636,6 +644,11 @@ function renderLobbyList() {
         <div class="num">—</div>
       </div>`;
 
+    // 已經在恢復室的推床，直接給「移除」結案；還在大廳的，給「已推到恢復室」繼續往下推
+    const actionButton = (isPushBed && atRecovery)
+      ? `<button onclick="completePushBed('${r.ID}')" class="btn-edit">移除</button>`
+      : `<button onclick="moveToRecoveryRoom('${r.ID}', ${isPushBed})" class="btn-complete">已推到恢復室</button>`;
+
     return `
       <div class="card p-4 flex items-center gap-4">
         ${porBadge}
@@ -645,10 +658,10 @@ function renderLobbyList() {
             <span class="${wardBedClass}">${escapeHtml(fixWardBedDisplay(r['病房床號']) || '—')}</span>
             <span class="${typePillClass}">${escapeHtml(r['床位類型'] || '')}</span>
           </div>
-          <p class="text-sm text-gray-500 mt-1">目前位置：<span class="font-bold">大廳候床</span></p>
+          <p class="text-sm text-gray-500 mt-1">目前位置：<span class="font-bold">${atRecovery ? '恢復室' : '大廳候床'}</span></p>
         </div>
         <div class="text-right flex-shrink-0">
-          <button onclick="moveToRecoveryRoom('${r.ID}', ${isPushBed})" class="btn-complete">已推到恢復室</button>
+          ${actionButton}
         </div>
       </div>
     `;
@@ -946,8 +959,8 @@ async function confirmComplete(id) {
 function getPushBedRecords() {
   // 顯示「還沒完成、且目前沒有在其他畫面看得到」的推床：
   // - 待推送、還沒被推到任何位置的（真正待推送）
-  // - 已推到「恢復室」但沒有連動成功、獨立卡住的（大廳候床頁面看不到這種，避免變成幽靈紀錄）
-  // 已推到「大廳」的不在這裡重複顯示，因為「大廳候床」分頁已經看得到、也能操作了
+  // - 已推到「恢復室」但沒有連動成功、獨立卡住的（已推床清單裡，運送紀錄在恢復室階段不會重複顯示這種，避免變成幽靈紀錄）
+  // 已推到「大廳」的不在這裡重複顯示，因為「已推床清單」分頁已經看得到、也能操作了
   return allRecords.filter(r =>
     r['項目類型'] === '推床' &&
     r['狀態'] !== '已完成' &&
@@ -997,8 +1010,7 @@ function renderPushBedList() {
           <span class="ml-2 pill" style="${statusStyle}">${statusLabel}</span>
           ${alert}
           <div class="flex gap-1 mt-2">
-            <button onclick="setPushBedLocation('${r.ID}', '大廳')" class="loc-select" style="cursor:pointer;">推到大廳</button>
-            <button onclick="setPushBedLocation('${r.ID}', '恢復室')" class="loc-select" style="cursor:pointer;">推到恢復室</button>
+            <button onclick="pushBedNow('${r.ID}')" class="loc-select" style="cursor:pointer; font-weight:700;">🛏️ 已推床</button>
           </div>
         </div>
         <button onclick="completePushBed('${r.ID}')" class="btn-edit" style="padding:.35rem .8rem;">移除</button>
@@ -1048,11 +1060,30 @@ async function handlePushBedSubmit(e) {
   }
 }
 
+// 「已推床」按鈕：系統自動判斷這張床要送大廳還是恢復室，不用人員手動選。
+// 判斷依據：這個病房床號如果已經有病人在「待運送」清單裡等，代表病人已經在恢復室了，直接送恢復室；
+// 否則代表病人還沒登記到系統裡，先送大廳暫存，等病人進來後畫面會自動連動，
+// 或人員之後在「已推床清單」再手動點「已推到恢復室」往下推。
+async function pushBedNow(id) {
+  const record = allRecords.find(rec => rec.ID === id);
+  if (!record) {
+    showToast('找不到這筆推床紀錄，請重新整理後再試', 'error');
+    return;
+  }
+  const hasWaitingPatient = allRecords.some(rec =>
+    rec['項目類型'] !== '推床' &&
+    rec['狀態'] === '待運送' &&
+    String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(record['病房床號']))
+  );
+  const location = hasWaitingPatient ? '恢復室' : '大廳';
+  await setPushBedLocation(id, location);
+}
+
 async function setPushBedLocation(id, location) {
   try {
     const res = await apiPost({ action: 'setPushLocation', id, location });
     if (res.success) {
-      showToast(`已標記為：${location}` + (location === '大廳' ? '（顯示於大廳候床）' : ''), 'success');
+      showToast(`已標記為：${location}`, 'success');
       fetchAll();
     } else {
       showToast(res.message || '操作失敗', 'error');
@@ -1353,4 +1384,3 @@ function registerServiceWorker() {
     });
   }
 }
-   
