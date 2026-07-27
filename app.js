@@ -1030,15 +1030,23 @@ async function handlePushBedSubmit(e) {
     return;
   }
 
-  // 防重複的唯一規則：只要該床號還有一筆「狀態 ≠ 已完成」的推床紀錄，就視為佔用
-  // （不管在待推送、還是已推到大廳/恢復室，只要還沒完成都算佔用；跟後端邏輯統一）
-  const duplicate = allRecords.find(r =>
+  // 防重複的規則有兩層：
+  // 1. 該床號還有一筆「狀態 ≠ 已完成」的推床紀錄，就視為佔用（不管待推送、還是已推到大廳/恢復室）
+  // 2. 該床號的病人紀錄本身已經有推送位置了（代表已經連動處理過，推床那筆會被自動標記完成，
+  //    如果不檢查這一層，同一個床號可以在病人連動成功後被無限次重複新增）
+  const pushBedDuplicate = allRecords.find(r =>
     r['項目類型'] === '推床' &&
     r['狀態'] !== '已完成' &&
     String(fixWardBedDisplay(r['病房床號'])) === String(wardBed)
   );
-  if (duplicate || pendingPushBedWards.has(wardBed)) {
-    showToast(`床號 ${wardBed} 已在待推大床清單中，請勿重複新增`, 'error');
+  const transportAlreadyResolved = allRecords.find(r =>
+    r['項目類型'] !== '推床' &&
+    r['狀態'] === '待運送' &&
+    r['推送位置'] &&
+    String(fixWardBedDisplay(r['病房床號'])) === String(wardBed)
+  );
+  if (pushBedDuplicate || transportAlreadyResolved || pendingPushBedWards.has(wardBed)) {
+    showToast(`床號 ${wardBed} 已在待推大床清單中或已處理，請勿重複新增`, 'error');
     return;
   }
 
