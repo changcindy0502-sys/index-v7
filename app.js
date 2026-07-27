@@ -457,6 +457,48 @@ function getStatusLevel(expectedLeave) {
   return 'green';
 }
 
+// ===================== 共用邏輯：推床狀態判斷（唯一資料來源） =====================
+// 統一判斷「這張病人紀錄對應的大床目前狀態」，所有畫面都呼叫這個函式取得答案，
+// 不要各自寫一份判斷邏輯——這是過去反覆出現邊界情況 bug 的根本原因（三個畫面各自猜一次，
+// 猜的方式稍有不同，就會漏掉某種狀態組合）。以後任何地方要判斷推床狀態，都改呼叫這裡。
+//
+// 傳入一筆「運送」紀錄，回傳：
+//   state: 'none'    → 大床病人，或這個床號目前沒有任何推床需求
+//          'pending' → 推床真的還沒被推送到任何位置，需要提示盡快處理
+//          'pushed'  → 已經被推到某個位置（不管是連動成功寫在病人紀錄自己身上，還是獨立推床紀錄卡著）
+//   location: '' | '大廳' | '恢復室'
+//   pushBedId: 若目前狀態是由「獨立推床紀錄」得知的，回傳該推床紀錄的 ID（要操作它時用這個 ID）；
+//              若是病人紀錄自己的推送位置欄位，回傳 null（直接對病人紀錄自己操作即可）
+function getPushBedStatusForRecord(r) {
+  if (r['床位類型'] === '大床') {
+    return { state: 'none', location: '', pushBedId: null };
+  }
+
+  // 先看病人紀錄自己的推送位置欄位（代表後端連動已經成功）
+  const ownLocation = r['推送位置'] || '';
+  if (ownLocation) {
+    return { state: 'pushed', location: ownLocation, pushBedId: null };
+  }
+
+  // 沒有的話，找有沒有一筆還沒完成、獨立存在的推床紀錄（真正待推送，或已推送但還沒連動成功）
+  const pushBed = allRecords.find(rec =>
+    rec['項目類型'] === '推床' &&
+    rec['狀態'] !== '已完成' &&
+    String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
+  );
+
+  if (!pushBed) {
+    return { state: 'none', location: '', pushBedId: null };
+  }
+
+  const location = pushBed['推送位置'] || '';
+  return {
+    state: location ? 'pushed' : 'pending',
+    location,
+    pushBedId: pushBed.ID
+  };
+}
+
 function renderWaitingList() {
   const records = getWaitingRecords();
   const container = document.getElementById('waitingList');
@@ -477,34 +519,17 @@ function renderWaitingList() {
     const level = expected ? getStatusLevel(expected) : 'green';
     let badgeClass = { green: 'bed-green', yellow: 'bed-yellow', red: 'bed-red' }[level];
 
-    // 若病房床號與「待推大床」清單中尚未推送的床號相同，強制以紅色提示尚有床需先推
-    // 大床類型不需提示（病人已躺在大床上，不用再推）
-    const pendingPushBeds = allRecords.filter(rec => rec['項目類型'] === '推床' && rec['狀態'] === '待推送' && !rec['推送位置']);
-    const wardBedMatch = r['床位類型'] !== '大床' &&
-      pendingPushBeds.some(rec => String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號'])));
+    // 統一呼叫共用函式取得這張床目前的推床狀態，不要在這裡重新猜一次
+    const pushStatus = getPushBedStatusForRecord(r);
+
     let pushAlert = '';
-    if (wardBedMatch) {
+    if (pushStatus.state === 'pending') {
       badgeClass = 'bed-red';
       pushAlert = `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此病房床號的大床尚待推送，請先確認推床</p>`;
     }
 
-    // 連動：後端在推床被推送時，若當下就有相同病房床號的「待運送」病人紀錄，
-    // 會直接把「推送位置」寫在病人紀錄自己身上（推床那筆則會立刻被標記完成）。
-    // 但這是「當下那一瞬間」的比對，如果推床發生時病人紀錄還沒建立（時間差），
-    // 就不會連動成功，推床會維持「已推送」獨立存在。這裡兩種情況都要照顧到：
-    // 先看病人紀錄自己的推送位置，沒有的話再找有沒有一筆還沒完成、獨立存在的推床紀錄。
-    const ownLocation = r['推送位置'] || '';
-    const linkedPushBed = r['床位類型'] !== '大床' && !ownLocation
-      ? allRecords.find(rec =>
-          rec['項目類型'] === '推床' &&
-          rec['狀態'] !== '已完成' &&
-          rec['推送位置'] &&
-          String(fixWardBedDisplay(rec['病房床號'])) === String(fixWardBedDisplay(r['病房床號']))
-        )
-      : null;
-    const effectiveLocation = ownLocation || (linkedPushBed ? linkedPushBed['推送位置'] : '');
-    const isLinkedToLobby = r['床位類型'] !== '大床' && effectiveLocation === '大廳';
-    const isLinkedToRecovery = r['床位類型'] !== '大床' && effectiveLocation === '恢復室';
+    const isLinkedToLobby = pushStatus.state === 'pushed' && pushStatus.location === '大廳';
+    const isLinkedToRecovery = pushStatus.state === 'pushed' && pushStatus.location === '恢復室';
     const pushedToLobbyBadge = isLinkedToLobby
       ? `<span class="pill" style="background:#e3f4ee;color:var(--green-600);">🛏️ 已推到-大廳</span>`
       : '';
@@ -558,7 +583,7 @@ function renderWaitingList() {
           <p class="text-gray-400 waiting-item-label">已等候: ${elapsedMin} 分鐘</p>
           <div class="flex gap-2">
             <button onclick='openEditModal(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="btn-edit">✏️ 編輯</button>
-            ${isLinkedToLobby ? `<button onclick="moveToRecoveryRoom('${linkedPushBed ? linkedPushBed.ID : r.ID}', ${linkedPushBed ? 'true' : 'false'})" class="btn-edit" style="background:var(--teal-700);color:#fff;border-color:var(--teal-700);">🛏️ 床到恢復室</button>` : ''}
+            ${isLinkedToLobby ? `<button onclick="moveToRecoveryRoom('${pushStatus.pushBedId || r.ID}', ${pushStatus.pushBedId ? 'true' : 'false'})" class="btn-edit" style="background:var(--teal-700);color:#fff;border-color:var(--teal-700);">🛏️ 床到恢復室</button>` : ''}
             <button onclick="openCompleteModal('${r.ID}', '${escapeHtml(r['POR床號'])}', '${escapeHtml(fixWardBedDisplay(r['病房床號']) || '')}')" class="btn-complete">🚀 接送完成</button>
           </div>
         </div>
@@ -919,9 +944,15 @@ async function confirmComplete(id) {
 /* ===================== 待推大床 ===================== */
 
 function getPushBedRecords() {
-  // 顯示所有「還沒完成」的推床——不管是真正待推送、還是已推到大廳/恢復室但還沒被結案，
-  // 都要能在這個清單被看到、被處理，避免有紀錄卡住卻沒有任何畫面能看到它、造成無法新增的假象
-  return allRecords.filter(r => r['項目類型'] === '推床' && r['狀態'] !== '已完成');
+  // 顯示「還沒完成、且目前沒有在其他畫面看得到」的推床：
+  // - 待推送、還沒被推到任何位置的（真正待推送）
+  // - 已推到「恢復室」但沒有連動成功、獨立卡住的（大廳候床頁面看不到這種，避免變成幽靈紀錄）
+  // 已推到「大廳」的不在這裡重複顯示，因為「大廳候床」分頁已經看得到、也能操作了
+  return allRecords.filter(r =>
+    r['項目類型'] === '推床' &&
+    r['狀態'] !== '已完成' &&
+    r['推送位置'] !== '大廳'
+  );
 }
 
 function renderPushBedList() {
@@ -950,16 +981,13 @@ function renderPushBedList() {
       ? `<p class="text-xs font-bold text-[var(--rose-500)] mt-1">⚠️ 此床病人已在恢復室，請優先推此大床</p>`
       : '';
 
-    // 依目前推送位置顯示對應狀態標籤：還沒推 / 已推到大廳（獨立，未連動）/ 已推到恢復室（獨立，未連動）
+    // 狀態標籤簡化：還沒推 = 待推送；只要已經推出去（不管大廳或恢復室）都統一顯示「已推床」
     const location = r['推送位置'] || '';
     let statusLabel = '待推送';
     let statusStyle = 'background:#fdf3d3;color:#a9802e;';
-    if (location === '大廳') {
-      statusLabel = '已推送-大廳';
+    if (location) {
+      statusLabel = '已推床';
       statusStyle = 'background:#e3f4ee;color:var(--green-600);';
-    } else if (location === '恢復室') {
-      statusLabel = '已推送-恢復室';
-      statusStyle = 'background:#e3edf7;color:var(--teal-700);';
     }
 
     return `
@@ -1325,3 +1353,4 @@ function registerServiceWorker() {
     });
   }
 }
+   
